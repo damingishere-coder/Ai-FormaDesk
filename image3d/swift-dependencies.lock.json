@@ -1,0 +1,11 @@
+{
+  "swiftPackageManagerStateVersion": 7,
+  "dependencies": [
+    {"identity":"mlx-swift","url":"https://github.com/ml-explore/mlx-swift","revision":"dc43e62d7055353c7f99fa071a4e71d29dfddc44","version":"0.31.4"},
+    {"identity":"swift-numerics","url":"https://github.com/apple/swift-numerics","revision":"0c0290ff6b24942dadb83a929ffaaa1481df04a2","version":"1.1.1"}
+  ],
+  "submodules": [
+    {"path":"mlx-swift/Source/Cmlx/mlx","revision":"ce45c52505c8158ea48d2a54e8caae05efd86bfe"},
+    {"path":"mlx-swift/Source/Cmlx/mlx-c","revision":"0726ca922fc902c4c61ef9c27d94132be418e945"}
+  ]
+}

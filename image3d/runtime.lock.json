@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "reserveBytes": 10737418240,
+  "sources": {
+    "hunyuan-swift": {
+      "url": "https://github.com/ZimengXiong/Hunyuan3D-Swift.git",
+      "commit": "292331f4d26ddb80b9dcea6bcb5629ff82f12b82",
+      "license": "MIT; model and port licenses remain separate"
+    },
+    "stablegen": {
+      "url": "https://github.com/sakalond/StableGen.git",
+      "commit": "fae5474098c40ce149a93dbfffe02b33876b3cd4",
+      "license": "GPL-3.0"
+    },
+    "ipadapter-plus": {
+      "url": "https://github.com/cubiq/ComfyUI_IPAdapter_plus.git",
+      "commit": "a0f451a5113cf9becb0847b92884cb10cbdec0ef",
+      "license": "GPL-3.0"
+    },
+    "comfyui": {
+      "url": "https://github.com/Comfy-Org/ComfyUI.git",
+      "commit": "ea33b15489b1cc7f13fc74f26e96af995479548f",
+      "license": "GPL-3.0"
+    }
+  },
+  "weights": [
+    {
+      "name": "shape-small",
+      "repo": "zimengxiong/hunyuan3d-mlx-shape-small",
+      "revision": "b7536809d38ad13fe6a9b7769a41fd5d42e520df",
+      "file": "config.yaml",
+      "path": "shape-small/config.yaml",
+      "size": 1628,
+      "sha256": "cabcba7f6115752c8fe5b370e12bf714936f70377a8a80f151872f76c2d64609"
+    },
+    {
+      "name": "shape-small",
+      "repo": "zimengxiong/hunyuan3d-mlx-shape-small",
+      "revision": "b7536809d38ad13fe6a9b7769a41fd5d42e520df",
+      "file": "model.fp16.safetensors",
+      "path": "shape-small/model.fp16.safetensors",
+      "size": 3819958234,
+      "sha256": "3cc66f3bea33e4062b7dbc875ffe1d70c4888914aec3e91b60f94e9bd01b522b"
+    },
+    {
+      "name": "sdxl-base",
+      "repo": "stabilityai/stable-diffusion-xl-base-1.0",
+      "revision": "462165984030d82259a11f4367a4eed129e94a7b",
+      "file": "sd_xl_base_1.0.safetensors",
+      "path": "comfy/checkpoints/sd_xl_base_1.0.safetensors",
+      "size": 6938078334,
+      "sha256": "31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b"
+    },
+    {
+      "name": "depth-controlnet",
+      "repo": "diffusers/controlnet-depth-sdxl-1.0",
+      "revision": "17bb97973f29801224cd66f192c5ffacf82648b4",
+      "file": "diffusion_pytorch_model.fp16.safetensors",
+      "path": "comfy/controlnet/controlnet_depth_sdxl_fp16.safetensors",
+      "size": 2502139134,
+      "sha256": "66a6813e6bd7270ecfe68206a59ddd605a011ae85321188376605c66e0a4f303"
+    },
+    {
+      "name": "ipadapter",
+      "repo": "h94/IP-Adapter",
+      "revision": "018e402774aeeddd60609b4ecdb7e298259dc729",
+      "file": "sdxl_models/ip-adapter-plus_sdxl_vit-h.safetensors",
+      "path": "comfy/ipadapter/ip-adapter-plus_sdxl_vit-h.safetensors",
+      "size": 847517512,
+      "sha256": "3f5062b8400c94b7159665b21ba5c62acdcd7682262743d7f2aefedef00e6581"
+    },
+    {
+      "name": "clip-vision",
+      "repo": "h94/IP-Adapter",
+      "revision": "018e402774aeeddd60609b4ecdb7e298259dc729",
+      "file": "models/image_encoder/model.safetensors",
+      "path": "comfy/clip_vision/CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+      "size": 2528373448,
+      "sha256": "6ca9667da1ca9e0b0f75e46bb030f7e011f44f86cbfb8d5a36590fcd7507b030"
+    },
+    {
+      "name": "lightning-8step",
+      "repo": "ByteDance/SDXL-Lightning",
+      "revision": "c9a24f48e1c025556787b0c58dd67a091ece2e44",
+      "file": "sdxl_lightning_8step_lora.safetensors",
+      "path": "comfy/loras/sdxl_lightning_8step_lora.safetensors",
+      "size": 393854592,
+      "sha256": "5aa30d94cdf7950a8b53a693682650ee061eddb128c5435a8f88defea73b2ac6"
+    }
+  ],
+  "defaults": {
+    "shape": {
+      "steps": 30,
+      "octree": 256,
+      "seed": 42
+    },
+    "texture": {
+      "steps": 8,
+      "resolution": 512,
+      "atlas": 2048,
+      "cfg": 1.0,
+      "sampler": "euler",
+      "scheduler": "sgm_uniform",
+      "loraApplication": "merged-parameter-wise",
+      "textEncoderLayer": "SDXL default penultimate"
+    },
+    "budgetSeconds": 1800,
+    "correctionRounds": 2
+  }
+}

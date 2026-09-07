@@ -30,6 +30,9 @@ import { Inspector } from "./Inspector";
 import { Composer } from "./Composer";
 import { ProjectLibrary } from "./ProjectLibrary";
 import { ExportPanel } from "./ExportPanel";
+import { ImagePreparation } from "./ImagePreparation";
+import { SurfaceRefinement } from "./SurfaceRefinement";
+import type { PreparedImage } from "./types";
 import {
   defaultRenderSettings,
   type RenderSettings,
@@ -38,7 +41,7 @@ import {
 } from "./types";
 import type { Project, Snapshot, Job, SceneCommand, Revision } from "./types";
 const terminal = (j: Job) =>
-  ["succeeded", "failed", "cancelled"].includes(j.status);
+  ["succeeded", "failed", "cancelled", "partial"].includes(j.status);
 const shortDate = (s: string) =>
   new Date(s).toLocaleString("zh-CN", {
     month: "2-digit",
@@ -65,6 +68,19 @@ export function App() {
     [view, setView] = useState("perspective"),
     [reloadKey, setReloadKey] = useState(0);
   const [chatExpanded, setChatExpanded] = useState(false);
+  const [preparation, setPreparation] = useState<PreparedImage | null>(null);
+  const [showCandidate, setShowCandidate] = useState(false);
+  const [refinement, setRefinement] = useState<{
+    kind: "shape" | "surface";
+    objectId: string;
+    baseRevisionId: string;
+    screenshot: string;
+    camera: CameraSpec;
+  } | null>(null);
+  const candidate =
+    job?.candidateArtifactId && !job.resultRevisionId
+      ? job
+      : snapshot?.candidates?.filter((j) => !j.resultRevisionId)?.at(-1);
   const [showRender, setShowRender] = useState(false);
   const [settings, setSettings] = useState<RenderSettings>(
     defaultRenderSettings,
@@ -131,6 +147,9 @@ export function App() {
     setRenderView(false);
     setShowRender(false);
     setChatExpanded(false);
+    setPreparation(null);
+    setRefinement(null);
+    setShowCandidate(false);
     setSettings(defaultRenderSettings);
     setReloadKey(0);
     void load(pid).catch((e) => setError(e.message));
@@ -153,15 +172,23 @@ export function App() {
     const receive = async (j: Job) => {
       if (disposed || currentPid.current !== p) return;
       setJob(j);
+      if (j.candidateArtifactId && j.type === "image3d") setShowCandidate(true);
       if (terminal(j) && !ending) {
         ending = true;
         setSubmitting(false);
         submitLock.current = false;
         if (j.type !== "discuss" && j.type !== "render")
           setReloadKey((k) => k + 1);
-        await load(p);
+        const fresh = await load(p);
+        if (j.preparedImageId)
+          setPreparation(
+            fresh?.preparedImages?.find((i) => i.id === j.preparedImageId) ||
+              null,
+          );
         if (j.status === "succeeded") {
-          if (j.type !== "discuss")
+          if (["accept-image3d", "image3d"].includes(j.type))
+            setShowCandidate(false);
+          if (j.type !== "discuss" && j.type !== "prepare-image")
             setNotice(
               j.type === "generate"
                 ? "建模已完成，详细结果保存在对话中。"
@@ -172,7 +199,9 @@ export function App() {
             setShowRender(true);
             setPanel("");
           }
-        } else setError(j.error || "任务已取消");
+        } else if (j.status === "partial")
+          setNotice(j.message || j.error || "已保留部分完成的候选");
+        else setError(j.error || "任务已取消");
       }
     };
     const source = new EventSource(`/api/jobs/${jid}/events`);
@@ -198,7 +227,12 @@ export function App() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (document.querySelector(".project-library")) return;
+      if (
+        document.querySelector(
+          ".project-library,.image-preparation,.surface-refinement",
+        )
+      )
+        return;
       if (
         target.closest("input,textarea,select,[contenteditable=true]") ||
         busy
@@ -268,6 +302,20 @@ export function App() {
     );
   }
   async function buildProposal(proposal: Proposal) {
+    if (proposal.route === "image3d" && proposal.primaryAttachmentId) {
+      const prepared = snapshot?.preparedImages
+        ?.filter((v) => v.attachmentId === proposal.primaryAttachmentId)
+        .at(-1);
+      if (prepared) {
+        setPreparation(prepared);
+        return;
+      }
+      await startJob("images/prepare", {
+        attachmentId: proposal.primaryAttachmentId,
+        baseRevisionId: base,
+      });
+      return;
+    }
     await startJob("generate", { proposalId: proposal.id });
   }
   async function command(c: Partial<SceneCommand>, id = selected) {
@@ -360,6 +408,14 @@ export function App() {
           <span>{busy ? "处理中" : base ? "已保存" : "空白项目"}</span>
         </span>
         <div className="top-actions">
+          {!!snapshot?.revision?.image3d && (
+            <span
+              className="experimental-badge"
+              title="不可见部分属于推测，初始尺度为估算"
+            >
+              图生模型 · 实验性
+            </span>
+          )}
           <button
             className="icon"
             aria-label="撤销"
@@ -377,6 +433,36 @@ export function App() {
             <Redo2 size={20} />
           </button>
           <span className="action-separator" />
+          {(["shape", "surface"] as const).map((kind) => (
+            <button
+              key={kind}
+              className="button"
+              disabled={
+                busy ||
+                !base ||
+                !selected ||
+                showCandidate ||
+                renderView ||
+                (kind === "surface" &&
+                  snapshot?.scene.objects.find((o) => o.id === selected)
+                    ?.type !== "MESH")
+              }
+              onClick={() => {
+                if (!base || !selected || !viewport.current) return;
+                const camera = viewport.current.camera();
+                setRefinement({
+                  kind,
+                  objectId: selected,
+                  baseRevisionId: base,
+                  camera,
+                  screenshot: viewport.current.screenshot(),
+                });
+                setChatExpanded(false);
+              }}
+            >
+              {kind === "shape" ? "调整形体" : "精修表面"}
+            </button>
+          ))}
           <button
             className="button"
             disabled={!base || busy}
@@ -413,14 +499,26 @@ export function App() {
             key={pid}
             ref={viewport}
             url={
-              snapshot.previewUrl
-                ? snapshot.previewUrl + "?reload=" + reloadKey
-                : null
+              showCandidate && candidate?.candidateArtifactId
+                ? `/api/artifacts/${candidate.candidateArtifactId}`
+                : snapshot.previewUrl
+                  ? snapshot.previewUrl + "?reload=" + reloadKey
+                  : null
             }
-            scene={snapshot.scene}
-            selected={selected}
-            readOnly={renderView}
+            scene={
+              showCandidate
+                ? candidate?.candidateManifest || {
+                    ...snapshot.scene,
+                    objects: [],
+                  }
+                : snapshot.scene
+            }
+            selected={showCandidate ? null : selected}
+            readOnly={renderView || showCandidate}
             onCameraChange={onCameraChange}
+            onReady={() => {
+              if (showCandidate) viewport.current?.fit();
+            }}
             frameAspect={renderView ? frameAspect : undefined}
             onSelect={setSelected}
             mode={mode}
@@ -432,6 +530,81 @@ export function App() {
           />
         )}
       </main>
+      {refinement && (
+        <SurfaceRefinement
+          {...refinement}
+          onClose={() => setRefinement(null)}
+          onSubmit={(text, mask) =>
+            startJob("refine", {
+              baseRevisionId: refinement.baseRevisionId,
+              objectId: refinement.objectId,
+              type: refinement.kind,
+              prompt: text,
+              camera: refinement.camera,
+              mask,
+            })
+          }
+        />
+      )}
+      {candidate?.candidateArtifactId && (
+        <div className="candidate-banner glass">
+          <span>
+            {showCandidate ? "候选预览 · 原作品保持不变" : "已有生成候选"}
+          </span>
+          <button onClick={() => setShowCandidate((v) => !v)}>
+            {showCandidate ? "查看原作品" : "查看候选"}
+          </button>
+          {showCandidate &&
+            (candidate.candidateManifest || candidate.candidateCanAdopt) &&
+            candidate.status === "partial" &&
+            !candidate.resultRevisionId && (
+              <button
+                disabled={busy || candidate.baseRevisionId !== base}
+                onClick={() =>
+                  void startJob(`candidates/${candidate.id}/accept`, {
+                    baseRevisionId: base,
+                  })
+                }
+              >
+                保存为可编辑版本
+              </button>
+            )}
+        </div>
+      )}
+      {preparation && (
+        <ImagePreparation
+          key={preparation.id}
+          image={preparation}
+          generationUnavailable={
+            health?.checking
+              ? "环境检查正在排队或执行，完成后即可生成。"
+              : !health?.ok
+                ? "本机执行环境暂不可用，请查看环境检查。"
+                : !health?.image3d?.shape?.installationReady ||
+                    !health?.image3d?.texture?.installationReady
+                  ? "本地图生引擎尚未安装完整，请查看环境检查。"
+                  : undefined
+          }
+          onClose={() => setPreparation(null)}
+          onSaved={(image) => {
+            setPreparation(image);
+            void load(pid);
+          }}
+          onGenerate={async (image, text, attachmentIds) => {
+            if (
+              await startJob("generate", {
+                route: "image3d",
+                preparedImageId: image.id,
+                attachmentIds,
+                prompt: text,
+                baseRevisionId: base,
+                objectId: null,
+              })
+            )
+              setPreparation(null);
+          }}
+        />
+      )}
       {renderView && base && (
         <div className="preview-label glass">
           实时材质预览 · 拖动旋转
@@ -508,7 +681,7 @@ export function App() {
           预览
         </button>
       </div>
-      {!base && !busy && snapshot && (
+      {!base && !busy && snapshot && !showCandidate && (
         <div className="empty-state">
           <div className="empty-cube">
             <Box strokeWidth={0.8} size={66} />
@@ -600,6 +773,12 @@ export function App() {
           onExpanded={setChatExpanded}
           onDiscuss={discuss}
           onBuild={(p) => void buildProposal(p)}
+          onPrepare={(id) => {
+            void startJob("images/prepare", {
+              attachmentId: id,
+              baseRevisionId: base,
+            });
+          }}
           onStop={() => {
             if (job)
               void api(`/jobs/${job.id}/cancel`, {}).catch((e) =>
@@ -833,6 +1012,27 @@ export function App() {
                         health.sandbox?.ok
                           ? "越界读取、写入和网络均已实测阻止"
                           : health.sandbox?.error || "检查中",
+                      ],
+                      [
+                        "本地形体引擎",
+                        health.image3d?.shape?.installationReady,
+                        health.image3d?.shape?.installationReady
+                          ? "shape-small 已安装；运行前完整校验权重"
+                          : "缺少形体引擎或权重",
+                      ],
+                      [
+                        "本地纹理引擎",
+                        health.image3d?.texture?.installationReady,
+                        health.image3d?.texture?.installationReady
+                          ? "SDXL、Depth、IPAdapter、Lightning 已安装"
+                          : "缺少纹理引擎或权重",
+                      ],
+                      [
+                        "图生建模工作空间",
+                        health.image3d?.disk?.hasWorkReserve,
+                        health.image3d?.disk
+                          ? `可用 ${(health.image3d.disk.freeBytes / 1024 ** 3).toFixed(1)} GiB；保留至少 10 GiB`
+                          : health.image3d?.error || "未检查",
                       ],
                     ].map(([name, ok, detail]) => (
                       <div key={String(name)}>

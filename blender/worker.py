@@ -25,9 +25,35 @@ def mat_node(mat):
     if not mat:return None
     mat.use_nodes=True
     return next((n for n in mat.node_tree.nodes if n.type=='BSDF_PRINCIPLED'),None)
+def material_factor(socket):
+    if not socket.is_linked:return socket.default_value
+    node=socket.links[0].from_node
+    if node.get('forma_factor')==socket.name:
+        return node.inputs[7 if socket.type=='RGBA' else 1].default_value
+    return (1,1,1,1) if socket.type=='RGBA' else 1.0
+def set_material_factor(mat,socket,value,replace=False):
+    if replace:
+        for link in list(socket.links):mat.node_tree.links.remove(link)
+    if not socket.is_linked:
+        socket.default_value=value;return
+    source=socket.links[0].from_socket
+    factor=source.node
+    if factor.get('forma_factor')!=socket.name:
+        if socket.type=='RGBA':
+            factor=mat.node_tree.nodes.new('ShaderNodeMix')
+            factor.data_type='RGBA';factor.blend_type='MULTIPLY';factor.inputs[0].default_value=1
+            mat.node_tree.links.new(source,factor.inputs[6])
+            output=factor.outputs[2]
+        else:
+            factor=mat.node_tree.nodes.new('ShaderNodeMath');factor.operation='MULTIPLY'
+            mat.node_tree.links.new(source,factor.inputs[0]);output=factor.outputs[0]
+        factor['forma_factor']=socket.name
+        factor.label='网页材质系数 / '+socket.name
+        mat.node_tree.links.new(output,socket)
+    factor.inputs[7 if socket.type=='RGBA' else 1].default_value=value
 def material(obj):
     n=mat_node(obj.active_material) if hasattr(obj,'active_material') else None
-    return None if not n else {'color':color_hex(n.inputs['Base Color'].default_value),'roughness':n.inputs['Roughness'].default_value,'metalness':n.inputs['Metallic'].default_value}
+    return None if not n else {'color':color_hex(material_factor(n.inputs['Base Color'])),'roughness':material_factor(n.inputs['Roughness']),'metalness':material_factor(n.inputs['Metallic'])}
 def find(oid):
     obj=next((o for o in bpy.context.scene.objects if o.get('forma_id')==oid),None)
     if obj is None:raise ValueError('对象 ID 不存在: '+oid)
@@ -55,10 +81,16 @@ def normalize():
     bpy.context.view_layer.update()
 def manifest():
     objects=[];verts=0;tris=0
+    depsgraph=bpy.context.evaluated_depsgraph_get()
     for obj in bpy.context.scene.objects:
-        if obj.type=='MESH':
-            verts+=len(obj.data.vertices);obj.data.calc_loop_triangles();tris+=len(obj.data.loop_triangles)
-        objects.append({'id':identity(obj),'name':obj.name,'type':obj.type,'parentId':identity(obj.parent) if obj.parent else None,'transform':{'position':list(obj.location),'rotation':list(obj.rotation_euler),'scale':list(obj.scale)},'matrix':[obj.matrix_local[r][c] for c in range(4) for r in range(4)],'visible':not obj.hide_render,'material':material(obj),'light':{'type':obj.data.type,'color':color_hex(obj.data.color),'energy':obj.data.energy} if obj.type=='LIGHT' else None})
+        if obj.type in ('MESH','CURVE','FONT','SURFACE','META'):
+            evaluated=obj.evaluated_get(depsgraph);mesh=evaluated.to_mesh()
+            try:
+                if mesh:
+                    verts+=len(mesh.vertices);mesh.calc_loop_triangles();tris+=len(mesh.loop_triangles)
+            finally:evaluated.to_mesh_clear()
+            if verts>2000000:raise ValueError('V1 场景应用修改器后超过 200 万顶点上限')
+        objects.append({'id':identity(obj),'name':obj.name,'type':obj.type,'parentId':identity(obj.parent) if obj.parent else None,**({'subjectId':obj['forma_subject_id']} if obj.get('forma_subject_id') else {}),'transform':{'position':list(obj.location),'rotation':list(obj.rotation_euler),'scale':list(obj.scale)},'matrix':[obj.matrix_local[r][c] for c in range(4) for r in range(4)],'visible':not obj.hide_render,'material':material(obj),'light':{'type':obj.data.type,'color':color_hex(obj.data.color),'energy':obj.data.energy} if obj.type=='LIGHT' else None})
     if verts>2000000:raise ValueError('V1 场景超过 200 万顶点上限')
     return {'objects':objects,'stats':{'objects':len(objects),'vertices':verts,'triangles':tris},'units':'meters','coordinates':'blender-z-up'}
 if mode=='execute':
@@ -67,6 +99,33 @@ if mode=='execute':
         bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False)
     with open(file('generated.py'),encoding='utf8') as f:code=compile(f.read(),'generated.py','exec')
     exec(code,{'bpy':bpy,'__name__':'__main__'})
+    bpy.ops.wm.save_as_mainfile(filepath=file('raw.blend'),check_existing=False)
+elif mode=='surface-refine':
+    open_scene('subject.blend')
+    bpy.context.preferences.filepaths.save_version=0
+    bpy.ops.wm.save_as_mainfile(filepath=file('raw.blend'),check_existing=False)
+elif mode=='image3d':
+    if os.path.exists(file('base.blend')):open_scene('base.blend')
+    else:
+        bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False)
+    request=read('command.json')
+    root_id=str(uuid.uuid4());root_matrix=Matrix.Identity(4);root_parent=None
+    if request.get('objectId'):
+        selected=find(request['objectId']);root_id=selected.get('forma_subject_id') or identity(selected)
+        old=find(root_id);root_matrix=old.matrix_world.copy();root_parent=old.parent
+        for obj in reversed(descendants(old)):bpy.data.objects.remove(obj,do_unlink=True)
+    root=bpy.data.objects.new(request.get('name','照片主体')[:120],None)
+    root['forma_id']=root_id;root['forma_subject_id']=root_id;root['forma_scale_estimated']=True
+    bpy.context.scene.collection.objects.link(root);root.parent=root_parent;root.matrix_world=root_matrix
+    with bpy.data.libraries.load(file('subject.blend'),link=False) as (source,target):
+        target.objects=source.objects
+    count=0
+    for obj in target.objects:
+        if obj and obj.type=='MESH':
+            local=obj.matrix_basis.copy();obj.parent=None
+            bpy.context.scene.collection.objects.link(obj);obj.parent=root;obj.matrix_basis=local
+            obj['forma_id']=str(uuid.uuid4());obj['forma_subject_id']=root_id;count+=1
+    if not count:raise ValueError('候选文件没有主体网格')
     bpy.ops.wm.save_as_mainfile(filepath=file('raw.blend'),check_existing=False)
 elif mode=='command':
     open_scene('base.blend');c=read('command.json');obj=find(c['objectId']);op=c['operation']
@@ -80,9 +139,11 @@ elif mode=='command':
         if len(obj.data.materials):obj.data.materials[obj.active_material_index]=mat
         else:obj.data.materials.append(mat)
         n=mat_node(mat);v=c['material']
-        for prop in ['Base Color','Roughness','Metallic']:
-            for link in list(n.inputs[prop].links):mat.node_tree.links.remove(link)
-        n.inputs['Base Color'].default_value=(*color_rgb(v['color']),1);n.inputs['Roughness'].default_value=v['roughness'];n.inputs['Metallic'].default_value=v['metalness']
+        if not n:raise ValueError('此材质没有可编辑的 Principled BSDF')
+        alpha=n.inputs['Base Color'].default_value[3]
+        set_material_factor(mat,n.inputs['Base Color'],(*color_rgb(v['color']),alpha),c.get('replaceTexture',False))
+        set_material_factor(mat,n.inputs['Roughness'],v['roughness'])
+        set_material_factor(mat,n.inputs['Metallic'],v['metalness'])
     elif op=='light':
         if obj.type!='LIGHT':raise ValueError('此对象不是灯光')
         if obj.data.users>1:obj.data=obj.data.copy()
@@ -100,20 +161,39 @@ elif mode=='command':
             cp['forma_id']=str(uuid.uuid4());bpy.context.collection.objects.link(cp);pairs[o]=cp
         for o,cp in pairs.items():
             if o.parent in pairs:cp.parent=pairs[o.parent]
+            if o.get('forma_subject_id'):
+                source_root=next((n for n in pairs if identity(n)==o['forma_subject_id']),None)
+                cp['forma_subject_id']=identity(pairs[source_root]) if source_root else identity(cp)
         pairs[obj].location.x+=.25
     bpy.ops.wm.save_as_mainfile(filepath=file('raw.blend'),check_existing=False)
 elif mode=='validate':
     open_scene('raw.blend');normalize();m=manifest()
     bpy.context.preferences.filepaths.save_version=0
     bpy.ops.wm.save_as_mainfile(filepath=file('scene.blend'),check_existing=False)
-    # GLB supports basic PBR; keep procedural nodes in the saved .blend,
-    # and use their explicit PBR fallback values in the web derivative.
-    for mat in bpy.data.materials:
-        n=mat_node(mat)
-        if n:
-            for prop in ['Base Color','Roughness','Metallic','Normal']:
-                for link in list(n.inputs[prop].links):
-                    if link.from_node.type not in ('TEX_IMAGE','NORMAL_MAP'):mat.node_tree.links.remove(link)
+    # The editable master keeps original geometry; only photo-subject previews
+    # receive decimation. Re-evaluate every subject after applying modifiers.
+    groups={}
+    for obj in bpy.context.scene.objects:
+        if obj.type=='MESH' and obj.get('forma_subject_id'):
+            groups.setdefault(obj['forma_subject_id'],[]).append(obj)
+    deps=bpy.context.evaluated_depsgraph_get()
+    for objects in groups.values():
+        total=0
+        for obj in objects:
+            evaluated=obj.evaluated_get(deps);mesh=evaluated.to_mesh()
+            try:mesh.calc_loop_triangles();total+=len(mesh.loop_triangles)
+            finally:evaluated.to_mesh_clear()
+        if total>150000:
+            for obj in objects:
+                modifier=obj.modifiers.new('网页预览简化','DECIMATE');modifier.ratio=145000/total
+        bpy.context.view_layer.update();deps=bpy.context.evaluated_depsgraph_get();preview_total=0
+        for obj in objects:
+            evaluated=obj.evaluated_get(deps);mesh=evaluated.to_mesh()
+            try:mesh.calc_loop_triangles();preview_total+=len(mesh.loop_triangles)
+            finally:evaluated.to_mesh_clear()
+        if preview_total>150000:raise ValueError('图生主体简化后仍超过 15 万三角面，拒绝更新网页版本')
+    # Let Blender's glTF exporter traverse supported image, factor and normal
+    # chains. Pruning non-image links here also destroys valid texture factors.
     # Export hidden objects too; visibility is carried by the authoritative manifest.
     hidden=[(o,o.hide_viewport,o.hide_render,o.hide_get()) for o in bpy.context.scene.objects]
     for o,_,_,_ in hidden:o.hide_viewport=False;o.hide_render=False;o.hide_set(False)

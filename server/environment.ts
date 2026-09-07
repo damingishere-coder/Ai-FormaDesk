@@ -5,6 +5,7 @@ import { BLENDER, DATA, ROOT } from "./config";
 import { runProcess } from "./process";
 import { runBlender } from "./sandbox";
 import { codex } from "./codex";
+import { imageEnvironment } from "./image3d";
 export let environment: any = {
   ok: false,
   checking: true,
@@ -21,6 +22,7 @@ export async function checkEnvironment() {
 async function perform() {
   environment = { ...environment, checking: true };
   const ai = await codex.health();
+  const image3d = await imageEnvironment();
   let blender: any = {
       ok: false,
       path: BLENDER,
@@ -104,13 +106,18 @@ async function perform() {
     codex: ai,
     blender,
     sandbox,
+    image3d,
   };
   return environment;
 }
 export function assertExecution() {
   if (!environment.blender.ok || !environment.sandbox.ok)
     throw Object.assign(
-      new Error("Blender 或沙箱检查未通过，执行已停用。请打开环境检查。"),
+      new Error(
+        environment.checking
+          ? "环境检查仍在等待本机计算资源或执行中，请稍候。"
+          : "Blender 或沙箱检查未通过，执行已停用。请打开环境检查。",
+      ),
       { statusCode: 503 },
     );
 }

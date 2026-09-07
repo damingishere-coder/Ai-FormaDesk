@@ -11,79 +11,107 @@ export function runProcess(
     timeout?: number;
     signal?: AbortSignal;
     registryDir?: string;
+    startTimeoutOnOutput?: string;
+    gracefulAbortMs?: number;
   } = {},
 ) {
-  return new Promise<{ stdout: string; stderr: string; code: number }>(
-    (resolve, reject) => {
-      if (options.signal?.aborted) return reject(new Error("任务已取消"));
-      const p = spawn(bin, args, {
-        cwd: options.cwd,
-        env: options.env,
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: true,
-      });
-      let stdout = "",
-        stderr = "",
-        timeout = false;
-      let record: string | undefined;
-      if (options.registryDir && p.pid) {
-        fs.mkdirSync(options.registryDir, { recursive: true });
-        record = path.join(options.registryDir, randomUUID() + ".json");
-        let started = "";
-        try {
-          started = execFileSync(
-            "/bin/ps",
-            ["-p", String(p.pid), "-o", "lstart="],
-            { encoding: "utf8" },
-          ).trim();
-        } catch {}
-        fs.writeFileSync(
-          record,
-          JSON.stringify({ pid: p.pid, started, cwd: options.cwd }),
-          { mode: 0o600 },
-        );
+  return new Promise<{
+    stdout: string;
+    stderr: string;
+    code: number;
+    executionMs: number;
+  }>((resolve, reject) => {
+    if (options.signal?.aborted) return reject(new Error("任务已取消"));
+    const p = spawn(bin, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    });
+    let stdout = "",
+      stderr = "",
+      timeout = false;
+    let record: string | undefined;
+    let abortTimer: ReturnType<typeof setTimeout> | undefined;
+    if (options.registryDir && p.pid) {
+      fs.mkdirSync(options.registryDir, { recursive: true });
+      record = path.join(options.registryDir, randomUUID() + ".json");
+      let started = "";
+      try {
+        started = execFileSync(
+          "/bin/ps",
+          ["-p", String(p.pid), "-o", "lstart="],
+          { encoding: "utf8" },
+        ).trim();
+      } catch {}
+      fs.writeFileSync(
+        record,
+        JSON.stringify({ pid: p.pid, started, cwd: options.cwd }),
+        { mode: 0o600 },
+      );
+    }
+    const kill = () => {
+      try {
+        process.kill(-p.pid!, "SIGKILL");
+      } catch {
+        p.kill("SIGKILL");
       }
-      const kill = () => {
-        try {
-          process.kill(-p.pid!, "SIGKILL");
-        } catch {
-          p.kill("SIGKILL");
-        }
-      };
-      const timer = setTimeout(() => {
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let executionStarted: number | undefined;
+    const startTimer = () => {
+      executionStarted = performance.now();
+      timer = setTimeout(() => {
         timeout = true;
         kill();
       }, options.timeout || 15000);
-      options.signal?.addEventListener("abort", kill, { once: true });
-      const cleanup = () => {
-        clearTimeout(timer);
-        options.signal?.removeEventListener("abort", kill);
-        if (record) fs.rmSync(record, { force: true });
-      };
-      p.stdout.on("data", (b) => {
-        stdout = (stdout + b.toString()).slice(-300000);
-      });
-      p.stderr.on("data", (b) => {
-        stderr = (stderr + b.toString()).slice(-100000);
-      });
-      p.on("error", (e) => {
-        cleanup();
-        reject(e);
-      });
-      p.on("close", (code, exitSignal) => {
-        cleanup();
-        if (timeout) reject(new Error("执行超时，任务进程已停止"));
-        else if (options.signal?.aborted) reject(new Error("任务已取消"));
-        else
-          resolve({
-            stdout,
-            stderr:
-              stderr + (exitSignal ? "\n进程被信号终止：" + exitSignal : ""),
-            code: code ?? -1,
-          });
-      });
-    },
-  );
+    };
+    if (!options.startTimeoutOnOutput) startTimer();
+    const abort = () => {
+      if (!options.gracefulAbortMs) return kill();
+      p.kill("SIGTERM");
+      abortTimer = setTimeout(kill, options.gracefulAbortMs);
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    const cleanup = () => {
+      clearTimeout(timer);
+      clearTimeout(abortTimer);
+      options.signal?.removeEventListener("abort", abort);
+      if (record) fs.rmSync(record, { force: true });
+    };
+    p.stdout.on("data", (b) => {
+      stdout = (stdout + b.toString()).slice(-300000);
+      if (
+        options.startTimeoutOnOutput &&
+        !timer &&
+        stdout.includes(options.startTimeoutOnOutput)
+      )
+        startTimer();
+    });
+    p.stderr.on("data", (b) => {
+      stderr = (stderr + b.toString()).slice(-100000);
+    });
+    p.on("error", (e) => {
+      cleanup();
+      reject(e);
+    });
+    p.on("close", (code, exitSignal) => {
+      cleanup();
+      if (timeout) reject(new Error("执行超时，任务进程已停止"));
+      else if (options.signal?.aborted) reject(new Error("任务已取消"));
+      else
+        resolve({
+          stdout,
+          stderr:
+            stderr + (exitSignal ? "\n进程被信号终止：" + exitSignal : ""),
+          code: code ?? -1,
+          executionMs:
+            executionStarted === undefined
+              ? 0
+              : performance.now() - executionStarted,
+        });
+    });
+  });
 }
 /** Only terminate recorded child instances: PID + birth time + job directory must match. */
 export function reapInterruptedProcesses(registry: string) {
