@@ -1,0 +1,6 @@
+# Supplement Blender 4.5 bundled Python only; use --no-deps and append sys.path.
+pillow==11.3.0 --hash=sha256:9c412fddd1b77a75aa904615ebaa6001f169b26fd467b4be93aded278266b288
+opencv-python-headless==4.11.0.86 --hash=sha256:48128188ade4a7e517237c8e1e11a9cdf5c282761473383e77beb875bb1e61ca
+websocket-client==1.9.0 --hash=sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef
+imageio==2.37.0 --hash=sha256:11efa15b87bc7871b61590326b2d635439acc321cf7f8ce996f812543ce10eed
+imageio-ffmpeg==0.6.0 --hash=sha256:b1ae3173414b5fc5f538a726c4e48ea97edc0d2cdc11f103afee655c463fa742

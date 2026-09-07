@@ -1,0 +1,93 @@
+# 本地图生建模：阶段 A 验证工具
+
+这里是独立运行的兼容性验证代码，尚未接入正式作品、版本或网页编辑接口。
+只有真实的形体生成、AI 纹理推理、StableGen 投射烘焙及网页查看全部通过，
+才能进入完整工作台改造。单个探针通过不会把整条路线标记成功。
+
+## 已固定的输入
+
+- `runtime.lock.json`：Hunyuan3D-Swift、StableGen、ComfyUI、IPAdapter 节点源码提交；全部模型的仓库版本、字节数和 SHA-256。
+- `swift-dependencies.lock.json`：MLX Swift、Swift Numerics 和 MLX/MLX-C 子模块提交。
+- 形体使用 shape-small、30 步、octree 256、种子 42。
+- 纹理使用 SDXL Base 1.0、FP16 Depth ControlNet、IPAdapter Plus ViT-H、Lightning 8 步。仅单视角 512；探针图集默认 512，可用 `--atlas 2048` 验证上限。
+- `comfy-backend.requirements.txt` 记录依赖筛选来源；实际安装使用 `comfy-python.requirements.txt`，固定 75 个包及 SHA-256。`blender-python.requirements.txt` 单独固定 5 个 Blender 补充依赖。
+
+模型权重共约 15.9 GiB，另需依赖、编译缓存及至少 10 GiB 工作余量。
+运行目录与源码分离，默认位于 `data/image3d-runtime`，不会纳入 Git。
+
+## 下载与编译
+
+从项目根目录运行；`--runtime` 可以指定独立磁盘目录：
+
+```sh
+python3 scripts/image3d/setup.py --source hunyuan-swift --source stablegen --source comfyui --source ipadapter-plus
+python3 scripts/image3d/setup.py --weights shape-small --workers 24
+python3 scripts/image3d/setup.py --weights sdxl-base --weights depth-controlnet --weights ipadapter --weights clip-vision --weights lightning-8step --workers 24
+python3 scripts/image3d/build.py --runtime data/image3d-runtime
+python3 scripts/image3d/python_env.py --runtime data/image3d-runtime --engine comfy
+python3 scripts/image3d/python_env.py --runtime data/image3d-runtime --engine blender
+```
+
+下载仅访问清单指定的官方来源；分片续传后仍校验完整 SHA-256。
+已有损坏文件会报错并保留；不会自动删除用户文件或回退到其他模型。
+推理不会触发模型下载。
+Python 环境安装需要 Python 3.12 / macOS arm64，Blender 补充依赖使用单独的 Python 3.11 兼容 wheel；不会修改 Blender 内置 Python。
+
+Swift 编译器和 Metal 编译器是两项独立检查。单独的 `swift build`
+不会构建 MLX 需要的 Metal 着色器；需要可运行的 Apple Metal Toolchain
+及 Xcode 构建。运行时还需让 CLI 找到对应的着色器资源。
+`repair_swift_cache.py` 仅修复一次实际遇到的 SwiftPM 6.3 缓存注册中断：
+先验证所有检出提交及子模块，保留缓存备份，再补齐注册；不修改上游源码。
+
+## 独立探针
+
+每次使用新的任务目录，旧目录不会被覆盖：
+
+```sh
+python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/foreground-01 --case foreground --image /absolute/path/reference.png
+python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/environment-01 --case environment
+python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/shape-01 --case shape --image /absolute/path/transparent.png
+python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/full-01 --case full --image /absolute/path/transparent.png
+```
+
+其他探针：`workflow` 生成真实 StableGen 工作流；`prepare --glb ...`
+验证导入、尺度归一化与深度图；`projection --blend ...` 验证投射、烘焙和导出。
+`fixture.py` 生成原创蓝色花瓶测试资产，不能作为照片重建效果验收。
+
+`run.json` 记录阶段、退出码、实际参数、耗时和峰值常驻内存。
+常驻内存数字不等于完整 GPU 内存或整机内存峰值。
+新运行另外通过 macOS `proc_pid_rusage` 采样专属进程组内存占用；这仍不是单独的 GPU 内存计量。
+`completePipeline` 在子探针中始终为 false；后台链路通过后，网页和视觉检查仍需单独记录。
+当前形体检查使用固定相机，尚未实现照片相机匹配和 GPT 纠错。
+单视角烘焙没有覆盖的背面不能视为完成上色。
+
+## 运行边界
+
+- 推理使用 macOS 沙箱，产物只写当前任务目录；源码、权重只读。GPU 任务额外允许系统 Metal 编译服务使用其专属编译缓存。
+- 默认禁止联网。纹理任务只允许专属本机 ComfyUI 端口，且关闭其 API 节点。
+- 本工具自身的推理任务使用进程锁串行；尚未与正式工作台的视频队列整合。
+- 30 分钟预算从取得推理锁开始，包含各推理阶段；排队、安装和权重校验不计入。
+- 针对当前 16 GiB Mac，进程组占用采样超过 11 GiB 时停止该阶段并保留候选；该保护不等于整机不会发生内存压力。
+- 取消及超时终止专属进程组；独立守护进程在主后台崩溃时终止孤立推理。失败只保留任务产物，不写入作品版本。
+- 网页验证服务只公开输入图、导出的 GLB 和 Three.js 文件，不公开任务日志。
+
+```sh
+python3 -m unittest discover -s scripts/image3d -p 'test_*.py' -v
+python3 scripts/image3d/viewer.py --job data/probes/full-01 --three node_modules/three
+python3 scripts/image3d/cancel_probe.py --runtime data/image3d-runtime --job data/probes/cancel-01 --image /absolute/path/transparent.png
+```
+
+## 来源与许可证
+
+上游代码作为独立检出保留其许可证，适配器不复制上游业务代码。
+
+| 组件 | 来源 / 许可证记录 |
+| --- | --- |
+| Hunyuan3D-Swift | [仓库](https://github.com/ZimengXiong/Hunyuan3D-Swift)，MIT；形体权重单独适用 Tencent Hunyuan Community 许可证 |
+| StableGen | [仓库](https://github.com/sakalond/StableGen)，GPL-3.0 |
+| ComfyUI | [仓库](https://github.com/Comfy-Org/ComfyUI)，GPL-3.0 |
+| IPAdapter 节点 | [仓库](https://github.com/cubiq/ComfyUI_IPAdapter_plus)，GPL-3.0 |
+| SDXL / Depth ControlNet / Lightning | 模型发布页标注 OpenRAIL++；具体发布版本见锁定清单 |
+| IPAdapter 权重 | [模型发布页](https://huggingface.co/h94/IP-Adapter)，Apache-2.0 |
+
+模型卡、独立许可证及安装证据保留在运行目录；本表不替代各组件许可证正文。
