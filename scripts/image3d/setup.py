@@ -82,7 +82,8 @@ def parallel_download(root, url, part, total, workers, expected_hash):
         if cancelled.is_set():
             raise RuntimeError('下载已取消')
         temporary = target.with_suffix('.part')
-        cmd = ['/usr/bin/curl', '-fLsS', '--http1.1', '--connect-timeout', '30', '--max-time', '360',
+        cmd = ['/usr/bin/curl', '-fLsS', '--http1.1', '--connect-timeout', '30', '--max-time', '180',
+               '--speed-time','30','--speed-limit','16384',
                '--retry', '5', '--retry-all-errors', '--retry-delay', '3', '--max-filesize', str(end - start),
                '--range', f'{start}-{end-1}', '--output', str(temporary), url]
         with mutex:
@@ -151,7 +152,7 @@ def download(root, names, workers=1):
             emit('verified', model=w['name'], path=str(dest))
             continue
         part = dest.with_suffix(dest.suffix + '.part')
-        url = f"https://huggingface.co/{w['repo']}/resolve/{w['revision']}/{w['file']}"
+        url = f"https://huggingface.co/{w['repo']}/resolve/{w['revision']}/{w['file']}?download=true"
         emit('downloading', model=w['name'], bytes=w['size'])
         if workers > 1 and w['size'] > 64 * 1024 * 1024:
             parallel_download(root, url, part, w['size'], workers, w['sha256'])

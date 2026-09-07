@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "purpose": "候选验收样本，仅固定公开素材来源；尚未完成各类别验收",
+  "samples": [
+    {
+      "title": "A white mug filled with warm coffee.jpg",
+      "file": "A-white-mug-filled-with-warm-coffee-jpg.jpg",
+      "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/8/81/A_white_mug_filled_with_warm_coffee.jpg/1280px-A_white_mug_filled_with_warm_coffee.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+      "sourcePage": "https://commons.wikimedia.org/wiki/File:A_white_mug_filled_with_warm_coffee.jpg",
+      "license": "CC BY 2.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+      "sha256": "7ade4e4556453b5a3b27b7f938f40d527855cd32fdf80576f2e0272f34cce3af",
+      "category": "object",
+      "author": "Shixart1985",
+      "inputLimitations": "俯视照片缺少侧面高度信息；仅作困难样本",
+      "acceptance": "pending"
+    },
+    {
+      "title": "American Gothic House - side view.jpg",
+      "file": "American-Gothic-House-side-view-jpg.jpg",
+      "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/c/c7/American_Gothic_House_-_side_view.jpg/1280px-American_Gothic_House_-_side_view.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+      "sourcePage": "https://commons.wikimedia.org/wiki/File:American_Gothic_House_-_side_view.jpg",
+      "license": "CC0",
+      "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "sha256": "081616fc81162d07a270b3db474548b6f8a602ce7c16b4e2ce3719792bcb12a2",
+      "category": "building",
+      "author": "Ser Amantio di Nicolao",
+      "inputLimitations": "树木遮挡部分屋顶；背面未知",
+      "acceptance": "pending"
+    },
+    {
+      "title": "Norris House.jpg",
+      "file": "Norris-House-jpg.jpg",
+      "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/2a/Norris_House.jpg/1280px-Norris_House.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+      "sourcePage": "https://commons.wikimedia.org/wiki/File:Norris_House.jpg",
+      "license": "CC0",
+      "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "sha256": "2608082612c6f5aa4e10474a691c166472057a66fef10fe5be872d744b06695a",
+      "category": "building",
+      "author": "Willthacheerleader18",
+      "inputLimitations": "屋顶顶部被裁切，枝条遮挡；仅作困难样本",
+      "acceptance": "pending"
+    },
+    {
+      "title": "Potted plant. (Maceta).jpg",
+      "file": "Potted-plant-Maceta-jpg.jpg",
+      "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/b/ba/Potted_plant._%28Maceta%29.jpg/1280px-Potted_plant._%28Maceta%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+      "sourcePage": "https://commons.wikimedia.org/wiki/File:Potted_plant._(Maceta).jpg",
+      "license": "CC0",
+      "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "sha256": "d89b229514cae83b318d6765715130a3fd7bf39d9d6ae536627178115d14bfa1",
+      "category": "plant",
+      "author": "Omar García",
+      "inputLimitations": "盆底被裁切，背景复杂；仅作困难样本",
+      "acceptance": "pending"
+    },
+    {
+      "title": "Sitting golden retriever.jpg",
+      "file": "Sitting-golden-retriever-jpg.jpg",
+      "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/e1/Sitting_golden_retriever.jpg/1280px-Sitting_golden_retriever.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+      "sourcePage": "https://commons.wikimedia.org/wiki/File:Sitting_golden_retriever.jpg",
+      "license": "CC0",
+      "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "sha256": "fb353662326f65ef598632fde3cab5afe8ca5a1a3ae84d4823e621765dbebf50",
+      "category": "animal",
+      "author": "Jiyoon Leee",
+      "inputLimitations": "牵引绳和背景花盆；尾巴部分不可见",
+      "acceptance": "pending"
+    },
+    {
+      "title": "Brunette woman portrait (Unsplash).jpg",
+      "file": "Brunette-woman-portrait-Unsplash-jpg.jpg",
+      "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/16/Brunette_woman_portrait_%28Unsplash%29.jpg/1280px-Brunette_woman_portrait_%28Unsplash%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+      "sourcePage": "https://commons.wikimedia.org/wiki/File:Brunette_woman_portrait_(Unsplash).jpg",
+      "license": "CC0",
+      "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "sha256": "2c039e18647821409f73509d07fdfe4c7d1320d98ab81a8d75a615340b6b3939",
+      "category": "person",
+      "author": "Christopher Campbell chrisjoelcampbell",
+      "inputLimitations": "仅半身，上肢被裁切；不能验收全身",
+      "acceptance": "pending"
+    },
+    {
+      "title": "Winter Woman Portrait.jpg",
+      "file": "Winter-Woman-Portrait-jpg.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/9/93/Winter_Woman_Portrait.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+      "sourcePage": "https://commons.wikimedia.org/wiki/File:Winter_Woman_Portrait.jpg",
+      "license": "CC0",
+      "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "sha256": "5e8731c7cce291aade20fe5b0de95dbfd1a39d49e4534785b45250dcdbca81c9",
+      "category": "person",
+      "author": "Petr Kratochvil",
+      "inputLimitations": "仅头像与部分肩部，帽顶被裁切；不能验收全身",
+      "acceptance": "pending"
+    },
+    {
+      "title": "Wooden Chair.jpg",
+      "file": "Wooden-Chair-jpg.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/5/51/Wooden_Chair.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+      "sourcePage": "https://commons.wikimedia.org/wiki/File:Wooden_Chair.jpg",
+      "license": "CC BY 2.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/2.0",
+      "sha256": "c3952277bbea4b0fd0214988791fec6943d6cfe75e8f50c82d1d4959dd96bf84",
+      "category": "object",
+      "author": "epSos.de",
+      "inputLimitations": "椅背空隙、四条腿及软垫需保留",
+      "acceptance": "pending"
+    },
+    {
+      "title": "Stevia rebaudiana (potted plant).jpg",
+      "file": "Stevia-rebaudiana-potted-plant-jpg.jpg",
+      "url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0f/Stevia_rebaudiana_%28potted_plant%29.jpg/1280px-Stevia_rebaudiana_%28potted_plant%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+      "sourcePage": "https://commons.wikimedia.org/wiki/File:Stevia_rebaudiana_(potted_plant).jpg",
+      "license": "CC0",
+      "licenseUrl": "http://creativecommons.org/publicdomain/zero/1.0/deed.en",
+      "sha256": "051e2884d83ab9982b2e5f98844704fe215695578439a4f6e6b4cfeef23685ef",
+      "category": "plant",
+      "author": "Gabriela F. Ruellan",
+      "inputLimitations": "细叶片、茎与花盆需要分别检查",
+      "acceptance": "pending"
+    }
+  ],
+  "privateSamples": [
+    {
+      "id": "user-cat-01",
+      "category": "animal",
+      "source": "user-supplied-local-only",
+      "acceptance": "not-accepted",
+      "issues": [
+        "额头与胡须碎片",
+        "脸和身体比例偏差"
+      ]
+    }
+  ],
+  "categoriesAccepted": []
+}

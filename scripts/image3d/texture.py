@@ -19,8 +19,12 @@ def request(port, path, value=None):
     data = None if value is None else json.dumps(value).encode()
     req = urllib.request.Request(f'http://127.0.0.1:{port}{path}',data=data,
                                  headers={'Content-Type':'application/json'})
-    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req,timeout=5) as response:
-        return json.load(response)
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req,timeout=5) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        detail=error.read(8192).decode('utf-8',errors='replace')
+        raise RuntimeError(f'ComfyUI {path} 返回 {error.code}：{detail}') from error
 
 
 def main():
@@ -31,6 +35,17 @@ def main():
     p.add_argument('--check-only',action='store_true')
     args=p.parse_args()
     runtime,job=args.runtime.resolve(),args.job.resolve()
+    mps_checked=False
+    if args.check_only:
+        import torch
+        if not torch.backends.mps.is_available():raise RuntimeError('MPS GPU 后端不可用')
+        matrix=torch.ones((64,64),device='mps',dtype=torch.float16)
+        product=matrix@matrix
+        torch.mps.synchronize()
+        if float(product[0,0].cpu())!=64.:raise RuntimeError('MPS 实际矩阵运算失败')
+        del matrix,product
+        torch.mps.empty_cache()
+        mps_checked=True
     base=job/'comfy'
     for folder in ['input','output','temp','custom_nodes','user']:
         (base/folder).mkdir(parents=True,exist_ok=True)
@@ -53,7 +68,8 @@ def main():
     command=[sys.executable,str(runtime/'sources/comfyui/main.py'),
              '--base-directory',str(base),'--extra-model-paths-config',str(config),
              '--listen','127.0.0.1','--port',str(args.port),'--lowvram','--force-fp16',
-             '--cpu-vae','--fp32-vae','--disable-auto-launch','--disable-api-nodes','--disable-metadata']
+             '--cpu-vae','--fp32-vae','--cache-none',
+             '--disable-auto-launch','--disable-api-nodes','--disable-metadata']
     # Refuse to talk to an unrelated server occupying this port.
     import socket
     with socket.socket() as sock:
@@ -74,7 +90,8 @@ def main():
             if args.check_only:
                 (job/'comfy-environment.json').write_text(json.dumps({
                     'availableNodes':sorted({n['class_type'] for n in workflow['prompt'].values()}),
-                    'system':request(args.port,'/system_stats'),'aiInferenceTested':False},indent=2))
+                    'system':request(args.port,'/system_stats'),'mpsComputeTested':mps_checked,
+                    'aiInferenceTested':False},indent=2))
                 print('COMFY_ENVIRONMENT_OK',flush=True)
                 return
             submitted=request(args.port,'/prompt',{'prompt':workflow['prompt']})

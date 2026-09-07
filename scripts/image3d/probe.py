@@ -20,6 +20,7 @@ def verify(runtime, names):
         if spec['name'] not in names:continue
         file=runtime/'models'/spec['path']
         if not file.is_file():raise RuntimeError('尚未安装并校验权重：'+spec['name'])
+        if file.resolve()!=file:raise RuntimeError('模型权重路径不允许符号链接：'+spec['name'])
         if file.stat().st_size!=spec['size'] or sha256(file)!=spec['sha256']:
             raise RuntimeError('权重校验失败，拒绝推理：'+spec['name'])
         evidence.append(spec)
@@ -30,7 +31,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--runtime',type=Path,default=ROOT/'data/image3d-runtime')
     p.add_argument('--job',type=Path,required=True)
-    p.add_argument('--case',choices=['foreground','projection','prepare','workflow','environment','shape','full'],required=True)
+    p.add_argument('--case',choices=['foreground','projection','prepare','workflow','environment','shape','texture','full'],required=True)
     p.add_argument('--image',type=Path)
     p.add_argument('--blend',type=Path)
     p.add_argument('--glb',type=Path)
@@ -44,10 +45,15 @@ def main():
     if (job/'run.json').exists():
         raise RuntimeError('探针目录已有报告；请使用新目录以保留历史证据')
     space(job,0)
-    selected={'shape-small'} if args.case=='shape' else {w['name'] for w in LOCK['weights']} if args.case=='full' else set()
+    all_weights={w['name'] for w in LOCK['weights']}
+    selected={'shape':{'shape-small'},'full':all_weights,
+              'texture':all_weights-{'shape-small'}}.get(args.case,set())
     weights=verify(runtime,selected)
     sources={}
-    needed= {'hunyuan-swift'} if args.case=='shape' else {'stablegen'} if args.case in ['projection','workflow'] else {'stablegen','comfyui','ipadapter-plus'} if args.case=='environment' else set(LOCK['sources']) if args.case=='full' else set()
+    texture_sources={'stablegen','comfyui','ipadapter-plus'}
+    needed={'shape':{'hunyuan-swift'},'projection':{'stablegen'},'workflow':{'stablegen'},
+            'environment':texture_sources,'texture':texture_sources,
+            'full':set(LOCK['sources'])}.get(args.case,set())
     for name in needed:
         folder=runtime/'sources'/name
         commit=subprocess.check_output(['git','-C',str(folder),'rev-parse','HEAD'],text=True).strip()
@@ -64,6 +70,9 @@ def main():
                                    'texture':{**LOCK['defaults']['texture'],'atlas':args.atlas}},
                      'visualAcceptance':'pending','categories':'experimental'})
     r.report['texturePrompt']=args.prompt
+    if (job/'reference.png').exists():
+        r.report['input']={'file':'reference.png','sha256':sha256(job/'reference.png'),
+                           'bytes':(job/'reference.png').stat().st_size}
     r.save()
     script=Path(__file__).with_name('blender_stage.py').resolve()
     app=BLENDER.parents[2]
@@ -89,25 +98,29 @@ def main():
                       [binary.resolve().parent,runtime/'models/shape-small'],gpu=True)
                 r.report['shapeCandidate']=glb(job/'shape.glb',triangle_limit=2_000_000)
                 r.save()
-            if args.case in ['prepare','full']:
-                if args.case=='prepare':
+            if args.case in ['prepare','texture','full']:
+                if args.case in ['prepare','texture']:
                     if not args.glb:p.error('准备探针需要 --glb')
                     shutil.copyfile(args.glb,job/'shape.glb')
+                    r.report['shapeCandidate']=glb(job/'shape.glb',triangle_limit=2_000_000)
+                    r.report['shapeSource']='supplied-mesh'
                 stage('prepare',[*blender,'--mode','prepare','--glb',job/'shape.glb'],read)
-            if args.case in ['workflow','environment','full']:
+                r.report['shapePreview']=glb(job/'shape-preview.glb')
+                r.save()
+            if args.case in ['workflow','environment','texture','full']:
                 stage('workflow',[*blender,'--mode','workflow','--prompt',args.prompt],read)
-            if args.case in ['environment','full']:
+            if args.case in ['environment','texture','full']:
                 python=runtime/'comfy-venv/bin/python'
                 texture_script=Path(__file__).with_name('texture.py').resolve()
                 stage('texture',[python,texture_script,'--runtime',runtime,'--job',job,
                                  *(['--check-only'] if args.case=='environment' else [])],
                       [Path(sys.base_prefix),runtime/'comfy-venv',runtime/'sources/comfyui',
                        runtime/'sources/ipadapter-plus',runtime/'models/comfy',script.parent],port=8189,gpu=True)
-            if args.case in ['projection','full']:
+            if args.case in ['projection','texture','full']:
                 if args.case=='projection':
                     if not args.blend:p.error('投射探针需要 --blend')
                     shutil.copyfile(args.blend,job/'geometry.blend')
-                texture=job/('generated-texture.png' if args.case=='full' else 'reference.png')
+                texture=job/('reference.png' if args.case=='projection' else 'generated-texture.png')
                 stage('projection',[*blender,'--blend',job/'geometry.blend','--texture',texture,'--atlas',str(args.atlas)],read)
                 r.report['texturedCandidate']=glb(job/'textured.glb',require_texture=True)
             r.report.update({'status':'subprobe-passed' if args.case!='full' else 'backend-passed',
@@ -116,7 +129,7 @@ def main():
             r.save()
     except Exception as error:
         r.report['error']=str(error)
-        if r.report.get('shapeCandidate') and r.report.get('status') not in ['cancelled']:
+        if (r.report.get('shapeCandidate') or r.report.get('shapePreview')) and r.report.get('status') not in ['cancelled']:
             r.report['status']='partial'
         r.save()
         raise

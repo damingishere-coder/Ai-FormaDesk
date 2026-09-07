@@ -46,12 +46,14 @@ Swift 编译器和 Metal 编译器是两项独立检查。单独的 `swift build
 ```sh
 python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/foreground-01 --case foreground --image /absolute/path/reference.png
 python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/environment-01 --case environment
+python3 scripts/image3d/health.py --runtime data/image3d-runtime --verify
 python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/shape-01 --case shape --image /absolute/path/transparent.png
 python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/full-01 --case full --image /absolute/path/transparent.png
 ```
 
 其他探针：`workflow` 生成真实 StableGen 工作流；`prepare --glb ...`
-验证导入、尺度归一化与深度图；`projection --blend ...` 验证投射、烘焙和导出。
+验证导入、尺度归一化、深度图、四面检查图和独立预览；`projection --blend ...` 验证投射、烘焙和导出。
+`texture --glb ... --image ...` 复用已验证形体排查 AI 纹理，避免每次重新生成形体；它仍不替代一次完整 `full` 验证。
 `fixture.py` 生成原创蓝色花瓶测试资产，不能作为照片重建效果验收。
 
 `run.json` 记录阶段、退出码、实际参数、耗时和峰值常驻内存。
@@ -91,3 +93,11 @@ python3 scripts/image3d/cancel_probe.py --runtime data/image3d-runtime --job dat
 | IPAdapter 权重 | [模型发布页](https://huggingface.co/h94/IP-Adapter)，Apache-2.0 |
 
 模型卡、独立许可证及安装证据保留在运行目录；本表不替代各组件许可证正文。
+
+## 现有材质流程回归
+
+`tests/blender/material_roundtrip.py` 使用真实 Blender 验证纹理改色、重复修改、法线与透明度连接、稳定 ID 和修改器统计。显式纯色替换目前仅在内部命令中验证，网页动作尚未接入。
+
+```sh
+"/Applications/Blender 4.5 LTS.app/Contents/MacOS/Blender" --background --factory-startup --disable-autoexec --threads 4 --python-exit-code 1 --python tests/blender/material_roundtrip.py -- "$PWD" "$PWD/data/probes/material-01"
+```

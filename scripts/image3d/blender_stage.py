@@ -56,6 +56,22 @@ def meshes():
     return objects, {'vertices': vertices, 'triangles': triangles}
 
 
+def export_preview(job, name, objects):
+    _, counts=meshes()
+    if counts['triangles']>150_000:
+        for obj in objects:
+            reduce=obj.modifiers.new('Web preview only','DECIMATE')
+            reduce.ratio=145_000/counts['triangles']
+    _, preview=meshes()
+    if preview['triangles']>150_000:raise RuntimeError('预览简化后仍超过 15 万三角面，保留原始 .blend')
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in objects:obj.select_set(True)
+    bpy.ops.export_scene.gltf(filepath=str(job/name),export_format='GLB',use_selection=True,
+                             export_apply=True,export_animations=False,export_cameras=False,
+                             export_lights=False,export_extras=True)
+    return preview
+
+
 def prepare_shape(job, glb):
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False)
@@ -114,9 +130,28 @@ def prepare_shape(job, glb):
     scene.render.filepath = str(job/'depth.png')
     bpy.ops.render.render(write_still=True)
     scene.use_nodes = False
+    neutral=bpy.data.materials.new('Shape inspection')
+    neutral.use_nodes=True
+    neutral.node_tree.nodes.get('Principled BSDF').inputs['Base Color'].default_value=(.55,.57,.6,1)
+    neutral.node_tree.nodes.get('Principled BSDF').inputs['Roughness'].default_value=.65
+    for obj in objects:
+        obj.data.materials.clear();obj.data.materials.append(neutral)
+    light=bpy.data.objects.new('Inspection light',bpy.data.lights.new('Inspection light','SUN'))
+    scene.collection.objects.link(light)
+    light.data.energy=2
+    light.rotation_euler=(math.radians(25),math.radians(-20),math.radians(-25))
+    scene.cycles.samples=8
+    original_camera=cam.matrix_world.copy()
+    for label,angle in [('front',0),('left',math.pi/2),('back',math.pi),('right',-math.pi/2)]:
+        cam.location=(2*math.sin(angle),-2*math.cos(angle),.25)
+        cam.rotation_euler=(-cam.location).to_track_quat('-Z','Y').to_euler()
+        scene.render.filepath=str(job/f'shape-{label}.png')
+        bpy.ops.render.render(write_still=True)
+    cam.matrix_world=original_camera
     bpy.context.preferences.filepaths.save_version = 0
     bpy.ops.wm.save_as_mainfile(filepath=str(job/'geometry.blend'),check_existing=False)
-    return {'mesh':counts,'longestSideMeters':1,'scaleEstimated':True,
+    preview=export_preview(job,'shape-preview.glb',objects)
+    return {'mesh':counts,'previewMesh':preview,'longestSideMeters':1,'scaleEstimated':True,
             'cameraMatched':False,'note':'阶段 A 固定相机；尚未实现照片视角匹配'}
 
 
@@ -210,22 +245,9 @@ def projection_bake(runtime, job, blend, texture, atlas):
         obj.data.materials.append(material)
     bpy.context.preferences.filepaths.save_version = 0
     bpy.ops.wm.save_as_mainfile(filepath=str(job / 'textured.blend'), check_existing=False)
-    # Export only geometry. The master retains its full mesh and camera.
-    _, evaluated_counts = meshes()
-    if evaluated_counts['triangles'] > 150_000:
-        for obj in objects:
-            reduce = obj.modifiers.new('Web preview only','DECIMATE')
-            reduce.ratio = 145_000/evaluated_counts['triangles']
-        _, preview_counts = meshes()
-        if preview_counts['triangles'] > 150_000:
-            raise RuntimeError('预览简化后仍超过 15 万三角面，保留原始 .blend')
-    bpy.ops.object.select_all(action='DESELECT')
-    for obj in objects:
-        obj.select_set(True)
-    bpy.ops.export_scene.gltf(filepath=str(job / 'textured.glb'), export_format='GLB',
-                              use_selection=True, export_apply=True, export_animations=False,
-                              export_cameras=False, export_lights=False, export_extras=True)
-    return {'mesh': counts, 'atlas': atlas, 'blender': bpy.app.version_string,
+    # The master was saved before adding preview-only modifiers.
+    preview_counts=export_preview(job,'textured.glb',objects)
+    return {'mesh': counts, 'previewMesh':preview_counts,'atlas': atlas, 'blender': bpy.app.version_string,
             'projection': 'StableGen.project_image', 'baking': 'StableGen.bake_texture',
             'aiTextureInference': False, 'note': '投射兼容性探针，不能替代完整生成验收'}
 

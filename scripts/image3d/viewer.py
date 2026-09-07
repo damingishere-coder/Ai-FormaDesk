@@ -28,6 +28,7 @@ def main():
     p.add_argument('--job',type=Path,required=True)
     p.add_argument('--three',type=Path,required=True)
     p.add_argument('--port',type=int,default=8876)
+    p.add_argument('--model',choices=['textured.glb','shape-preview.glb'],default='textured.glb')
     args=p.parse_args()
     job,three=args.job.resolve(),args.three.resolve()
     class Handler(BaseHTTPRequestHandler):
@@ -35,7 +36,7 @@ def main():
             path=unquote(urlsplit(self.path).path)
             if path=='/':data=HTML.encode();mime='text/html; charset=utf-8'
             else:
-                targets={'/scene.glb':(job/'textured.glb','model/gltf-binary'),'/reference.png':(job/'reference.png','image/png')}
+                targets={'/scene.glb':(job/args.model,'model/gltf-binary'),'/reference.png':(job/'reference.png','image/png')}
                 if path.startswith('/vendor/'):
                     target=(three/path.removeprefix('/vendor/')).resolve()
                     if not target.is_relative_to(three) or target.suffix!='.js':self.send_error(404);return
