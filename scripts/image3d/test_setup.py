@@ -49,5 +49,23 @@ class DownloadBoundaryTest(unittest.TestCase):
         self.assertEqual(self.part.read_bytes(),b'good')
         self.assertFalse(self.chunks.exists())
 
+    def test_timeout_resumes_inside_a_partial_chunk(self):
+        (self.chunks/'0.part').write_bytes(b'g')
+        requested=[]
+        class Curl:
+            def __init__(self,command,**kwargs):
+                bounds=command[command.index('--range')+1]
+                requested.append(bounds)
+                Path(command[command.index('--dump-header')+1]).write_text(
+                    f'HTTP/1.1 206 Partial Content\nContent-Range: bytes {bounds}/4\n\n')
+                Path(command[command.index('--output')+1]).write_bytes(b'o' if bounds=='1-3' else b'od')
+                self.returncode=28 if bounds=='1-3' else 0
+            def communicate(self):return None,b''
+        with patch('setup.space'),patch('setup.subprocess.Popen',Curl):
+            parallel_download(self.root,'https://example.invalid/',self.part,4,2,
+                              hashlib.sha256(b'good').hexdigest())
+        self.assertEqual(requested,['1-3','2-3'])
+        self.assertEqual(self.part.read_bytes(),b'good')
+
 
 if __name__=='__main__':unittest.main()

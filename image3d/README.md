@@ -28,7 +28,7 @@ python3 scripts/image3d/python_env.py --runtime data/image3d-runtime --engine co
 python3 scripts/image3d/python_env.py --runtime data/image3d-runtime --engine blender
 ```
 
-下载仅访问清单指定的官方来源；分片续传后仍校验完整 SHA-256。
+下载仅访问清单指定的官方来源；支持分片内部断点续传，检查响应字节范围后仍校验完整 SHA-256。
 已有损坏文件会报错并保留；不会自动删除用户文件或回退到其他模型。
 推理不会触发模型下载。
 Python 环境安装需要 Python 3.12 / macOS arm64，Blender 补充依赖使用单独的 Python 3.11 兼容 wheel；不会修改 Blender 内置 Python。
@@ -76,6 +76,8 @@ python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probe
 ```sh
 python3 -m unittest discover -s scripts/image3d -p 'test_*.py' -v
 python3 scripts/image3d/viewer.py --job data/probes/full-01 --three node_modules/three
+# 在另一终端验证实际载入与旋转；先核对服务返回的 GLB 与任务文件 SHA-256。
+node scripts/image3d/browser_probe.mjs data/probes/full-01
 python3 scripts/image3d/cancel_probe.py --runtime data/image3d-runtime --job data/probes/cancel-01 --image /absolute/path/transparent.png
 ```
 

@@ -17,6 +17,7 @@ import time
 import threading
 import signal
 import fcntl
+import re
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCK = json.loads((ROOT / 'image3d/runtime.lock.json').read_text())
@@ -82,22 +83,44 @@ def parallel_download(root, url, part, total, workers, expected_hash):
         if cancelled.is_set():
             raise RuntimeError('下载已取消')
         temporary = target.with_suffix('.part')
-        cmd = ['/usr/bin/curl', '-fLsS', '--http1.1', '--connect-timeout', '30', '--max-time', '180',
-               '--speed-time','30','--speed-limit','16384',
-               '--retry', '5', '--retry-all-errors', '--retry-delay', '3', '--max-filesize', str(end - start),
-               '--range', f'{start}-{end-1}', '--output', str(temporary), url]
-        with mutex:
+        transfer=target.with_suffix('.transfer')
+        headers=target.with_suffix('.headers')
+        for attempt in range(6):
             if cancelled.is_set():
                 raise RuntimeError('下载已取消')
-            child = subprocess.Popen(cmd, start_new_session=True, stderr=subprocess.PIPE)
-            processes.add(child)
-        _, error = child.communicate()
-        with mutex:
-            processes.discard(child)
-        if child.returncode or not temporary.exists() or temporary.stat().st_size != end - start:
-            raise RuntimeError(f'分片 {start} 未完成，退出码 {child.returncode}；可重试续传')
-        temporary.replace(target)
-        return end - start
+            offset=temporary.stat().st_size if temporary.exists() else 0
+            if offset==end-start:
+                temporary.replace(target)
+                return end-start
+            if offset>end-start:raise RuntimeError(f'分片 {start} 的部分文件大小异常，已保留')
+            transfer.unlink(missing_ok=True);headers.unlink(missing_ok=True)
+            cmd=['/usr/bin/curl','-fLsS','--http1.1','--connect-timeout','30','--max-time','180',
+                 '--speed-time','30','--speed-limit','16384','--max-filesize',str(end-start-offset),
+                 '--range',f'{start+offset}-{end-1}','--dump-header',str(headers),'--output',str(transfer),url]
+            with mutex:
+                if cancelled.is_set():raise RuntimeError('下载已取消')
+                child=subprocess.Popen(cmd,start_new_session=True,stderr=subprocess.PIPE)
+                processes.add(child)
+            child.communicate()
+            with mutex:processes.discard(child)
+            if cancelled.is_set():raise RuntimeError('下载已取消')
+            # Preserve bytes received before a timeout, but only after checking
+            # the actual range response. The whole-file SHA remains mandatory.
+            ranges_received=re.findall(r'^content-range:\s*bytes (\d+)-(\d+)/(\d+)\s*$',
+                headers.read_text(errors='replace') if headers.exists() else '',re.M|re.I)
+            expected=(str(start+offset),str(end-1),str(total))
+            if child.returncode in (0,18,28,56) and transfer.exists() and ranges_received and ranges_received[-1]==expected:
+                received=transfer.stat().st_size
+                if 0<received<=end-start-offset:
+                    with temporary.open('ab') as output,transfer.open('rb') as source:
+                        shutil.copyfileobj(source,output)
+                transfer.unlink(missing_ok=True)
+            headers.unlink(missing_ok=True)
+            if temporary.exists() and temporary.stat().st_size==end-start:
+                temporary.replace(target)
+                return end-start
+            if attempt<5:cancelled.wait(3)
+        raise RuntimeError(f'分片 {start} 未完成，退出码 {child.returncode}；已保留部分数据供续传')
 
     pool = ThreadPoolExecutor(max_workers=workers)
     done = 0
