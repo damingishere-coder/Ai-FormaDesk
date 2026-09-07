@@ -139,7 +139,9 @@ function Content({
     setObjects(new Map());
     let alive = true;
     let loaded: THREE.Group | undefined;
-    const dispose = (g: THREE.Group) =>
+    const dispose = (g: THREE.Group) => {
+      const textures = new Set<THREE.Texture>();
+      const images = new Set<ImageBitmap>();
       g.traverse((o) => {
         if (o instanceof THREE.Mesh) {
           o.geometry.dispose();
@@ -147,12 +149,24 @@ function Content({
             ? o.material
             : [o.material]) {
             Object.values(m).forEach((v) => {
-              if (v instanceof THREE.Texture) v.dispose();
+              if (v instanceof THREE.Texture && !textures.has(v)) {
+                textures.add(v);
+                if (
+                  typeof ImageBitmap !== "undefined" &&
+                  v.image instanceof ImageBitmap &&
+                  !images.has(v.image)
+                ) {
+                  images.add(v.image);
+                  v.image.close();
+                }
+                v.dispose();
+              }
             });
             m.dispose();
           }
         }
       });
+    };
     new GLTFLoader().load(
       props.url,
       (gltf) => {

@@ -60,6 +60,7 @@ def main():
         if args.quality_handshake:
             blender(f'fit-review-{attempt}','multiview_stage.py',['--mode','fit-review'])
             r.report['cameraFit']=json.loads((job/'camera-fit.json').read_text())
+            r.report.setdefault('shapeCameraFits',{})[str(attempt)]=r.report['cameraFit']
         candidate=f'shape-candidate-{attempt}.glb'
         shutil.copyfile(job/'shape-preview.glb',job/candidate)
         for side in ['front','left','right','back']:
@@ -93,6 +94,7 @@ def main():
                 r.stage('shape',[binary,'shape',job/'reference.png','-o',job/'shape.glb','--weights',runtime/'models/shape-small',
                     '--steps','30','--octree','256','--seed','42'],[binary.parent,runtime/'models/shape-small'],gpu=True)
             r.report['shapeCandidate']=glb(job/'shape.glb',triangle_limit=2_000_000);r.save()
+            r.report['selectedShapeSeed']=None if args.shape else 42
             prepare(0,job/'shape.glb')
             decision=review(0)
             if decision['action']=='regenerate' and not args.shape:
@@ -101,8 +103,11 @@ def main():
                     '--steps','30','--octree','256','--seed','43'],[binary.parent,runtime/'models/shape-small'],gpu=True)
                 r.report['retryShapeCandidate']=glb(job/'shape-retry.glb',triangle_limit=2_000_000)
                 prepare(1,job/'shape-retry.glb');decision=review(1)
+                if decision['action']=='continue':r.report['selectedShapeSeed']=43
             if decision['action']!='continue':
                 r.report['shapePreviewFile']='shape-candidate-0.glb';r.report['shapePreview']=glb(job/'shape-candidate-0.glb');r.save()
+                if r.report.get('shapeCameraFits',{}).get('0'):
+                    r.report['cameraFit']=r.report['shapeCameraFits']['0'];r.save()
                 raise RuntimeError(decision.get('error') or '形体对照检查未通过，已保留原候选及纠错记录')
             blender('photo-projection','multiview_stage.py',['--mode','initialize'])
             r.report['cameraFit']=json.loads((job/'camera-fit.json').read_text())
