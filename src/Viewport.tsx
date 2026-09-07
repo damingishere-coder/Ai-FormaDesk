@@ -23,6 +23,7 @@ export type ViewportHandle = {
   camera: () => CameraSpec;
   view: (v: string) => void;
   fit: () => void;
+  screenshot: () => string;
 };
 export type ViewportProps = {
   url: string | null;
@@ -33,6 +34,10 @@ export type ViewportProps = {
   busy: boolean;
   onTransform: (id: string, t: SceneCommand["transform"]) => void;
   onError: (s: string) => void;
+  readOnly?: boolean;
+  onCameraChange?: (camera: CameraSpec) => void;
+  onReady?: () => void;
+  frameAspect?: number;
 };
 const C = new THREE.Matrix4().makeRotationX(-Math.PI / 2),
   Ci = C.clone().invert();
@@ -79,13 +84,24 @@ function Content({
   useImperativeHandle(
     handle,
     () => ({
-      camera: () => ({
-        position: camera.position.toArray(),
-        target: orbit.current.target.toArray(),
-        up: camera.up.toArray(),
-        fov: (camera as THREE.PerspectiveCamera).fov,
-        aspect: (camera as THREE.PerspectiveCamera).aspect,
-      }),
+      camera: () => {
+        // Finish the tiny orbit damping remainder before freezing a render camera.
+        const controls = orbit.current;
+        if (controls) {
+          const damping = controls.enableDamping;
+          controls.enableDamping = false;
+          controls.update();
+          controls.enableDamping = damping;
+        }
+        return {
+          position: camera.position.toArray(),
+          target: orbit.current.target.toArray(),
+          up: camera.up.toArray(),
+          fov: (camera as THREE.PerspectiveCamera).fov,
+          aspect: (camera as THREE.PerspectiveCamera).aspect,
+        };
+      },
+      screenshot: () => gl.domElement.toDataURL("image/png"),
       fit,
       view: (v) => {
         if (v === "perspective") {
@@ -119,6 +135,8 @@ function Content({
       setObjects(new Map());
       return;
     }
+    setGroup(null);
+    setObjects(new Map());
     let alive = true;
     let loaded: THREE.Group | undefined;
     const dispose = (g: THREE.Group) =>
@@ -183,6 +201,9 @@ function Content({
         });
         setGroup(loaded);
         setObjects(map);
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => props.onReady?.()),
+        );
       },
       undefined,
       (e) => {
@@ -194,6 +215,19 @@ function Content({
       if (loaded) dispose(loaded);
     };
   }, [props.url]);
+  useEffect(() => {
+    const cam = camera as THREE.PerspectiveCamera;
+    // Keep the centered crop frame at a constant 42 degree vertical field of view.
+    const visibleFraction = props.frameAspect
+      ? Math.min(1, size.width / size.height / props.frameAspect)
+      : 1;
+    cam.fov = THREE.MathUtils.radToDeg(
+      2 *
+        Math.atan(Math.tan(THREE.MathUtils.degToRad(42 / 2)) / visibleFraction),
+    );
+    cam.updateProjectionMatrix();
+    invalidate();
+  }, [props.frameAspect, size.width, size.height]);
   const fitted = useRef(false);
   useEffect(() => {
     if (group && !fitted.current) {
@@ -201,7 +235,8 @@ function Content({
       fitted.current = true;
     }
   }, [group]);
-  const selected = props.selected ? objects.get(props.selected) : undefined;
+  const selected =
+    !props.readOnly && props.selected ? objects.get(props.selected) : undefined;
   const pivot = useMemo(() => new THREE.Object3D(), []);
   const pivotStart = useRef(new THREE.Matrix4());
   const objectStart = useRef(new THREE.Matrix4());
@@ -243,18 +278,20 @@ function Content({
       <ambientLight intensity={1.2} />
       <directionalLight position={[4, 7, 5]} intensity={2.5} />
       <directionalLight position={[-4, 3, -3]} intensity={1} />
-      <Grid
-        infiniteGrid
-        position={[0, -0.006, 0]}
-        cellSize={0.25}
-        sectionSize={1}
-        cellColor="#dfdfdc"
-        sectionColor="#cfcfca"
-        cellThickness={0.5}
-        sectionThickness={0.8}
-        fadeDistance={20}
-        fadeStrength={1.5}
-      />
+      {!props.readOnly && (
+        <Grid
+          infiniteGrid
+          position={[0, -0.006, 0]}
+          cellSize={0.25}
+          sectionSize={1}
+          cellColor="#dfdfdc"
+          sectionColor="#cfcfca"
+          cellThickness={0.5}
+          sectionThickness={0.8}
+          fadeDistance={20}
+          fadeStrength={1.5}
+        />
+      )}
       {group && (
         <primitive
           object={group}
@@ -263,6 +300,7 @@ function Content({
           }}
           onClick={(e: any) => {
             if (
+              props.readOnly ||
               dragging.current ||
               Math.hypot(
                 e.clientX - clickStart.current[0],
@@ -296,6 +334,16 @@ function Content({
         dampingFactor={0.1}
         minDistance={0.2}
         maxDistance={150}
+        onChange={() => {
+          if (orbit.current)
+            props.onCameraChange?.({
+              position: camera.position.toArray(),
+              target: orbit.current.target.toArray(),
+              up: camera.up.toArray(),
+              fov: (camera as THREE.PerspectiveCamera).fov,
+              aspect: (camera as THREE.PerspectiveCamera).aspect,
+            });
+        }}
       />
       <primitive object={pivot} />
       {selected && props.mode !== "select" && !props.busy && (

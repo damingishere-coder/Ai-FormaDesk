@@ -33,10 +33,20 @@ import { reapInterruptedProcesses } from "./process";
 import {
   commandSchema,
   cameraSchema,
+  renderSettingsSchema,
+  type Proposal,
   type Job,
   type Project,
   type Snapshot,
 } from "../src/types";
+import {
+  uploadImage,
+  attachmentPath,
+  validateAttachments,
+  removeUnusedImage,
+  collectUnusedImages,
+} from "./attachments";
+import { projectLibrary, trashProject, purgeProject } from "./projects";
 const app = Fastify({ logger: false, bodyLimit: 256 * 1024 });
 await app.register(cookie);
 const session = randomBytes(32).toString("hex");
@@ -73,7 +83,7 @@ app.addHook("onRequest", async (req, reply) => {
       return reply.code(403).send({ error: "缺少本地会话校验" });
   }
 });
-app.setErrorHandler((err, req, reply) => {
+app.setErrorHandler((err, _req, reply) => {
   reply
     .code(err instanceof z.ZodError ? 400 : (err as any).statusCode || 500)
     .send({
@@ -95,7 +105,75 @@ app.get("/api/session", async (_, reply) => {
 });
 app.get("/api/health", async () => environment);
 app.post("/api/health/recheck", async () => checkEnvironment());
-app.get("/api/projects", async () => list<Project>("project"));
+app.get<{ Querystring: { trash?: string } }>("/api/projects", async (req) =>
+  projectLibrary(req.query.trash === "1"),
+);
+app.addContentTypeParser(
+  "application/octet-stream",
+  { parseAs: "buffer" },
+  (_req, body, done) => done(null, body),
+);
+app.post<{ Params: { id: string } }>(
+  "/api/projects/:id/attachments",
+  { bodyLimit: 10 * 1024 * 1024 },
+  async (req, reply) => {
+    if (!Buffer.isBuffer(req.body))
+      return reply.code(400).send({ error: "需要图片文件" });
+    const name = decodeURIComponent(
+      String(req.headers["x-file-name"] || "参考图片"),
+    );
+    return reply
+      .code(201)
+      .send(await uploadImage(req.params.id, req.body, name));
+  },
+);
+app.get<{ Params: { id: string; aid: string } }>(
+  "/api/projects/:id/attachments/:aid",
+  async (req, reply) => {
+    project(req.params.id, true);
+    return reply
+      .type("image/png")
+      .header("Cache-Control", "private, max-age=3600")
+      .send(fs.createReadStream(attachmentPath(req.params.id, req.params.aid)));
+  },
+);
+app.delete<{ Params: { id: string; aid: string } }>(
+  "/api/projects/:id/attachments/:aid",
+  async (req) => {
+    project(req.params.id);
+    removeUnusedImage(req.params.id, req.params.aid);
+    return { deleted: true };
+  },
+);
+app.post<{ Params: { id: string } }>("/api/projects/:id/trash", async (req) =>
+  trashProject(req.params.id),
+);
+app.post<{ Params: { id: string } }>("/api/projects/:id/untrash", async (req) =>
+  trashProject(req.params.id, true),
+);
+app.delete<{ Params: { id: string } }>("/api/projects/:id", async (req) => {
+  z.object({ confirm: z.literal(true) }).parse(req.body);
+  return purgeProject(req.params.id);
+});
+app.post<{ Params: { id: string } }>(
+  "/api/projects/:id/discuss",
+  async (req, reply) => {
+    const b = z
+      .object({
+        baseRevisionId: z.string().uuid().nullable(),
+        prompt: z.string().trim().max(10000),
+        objectId: z.string().uuid().nullable().optional(),
+        attachmentIds: z.array(z.string().uuid()).max(6).default([]),
+      })
+      .parse(req.body);
+    if (!b.prompt && !b.attachmentIds.length)
+      return reply.code(400).send({ error: "请输入想法或添加图片" });
+    validateAttachments(req.params.id, b.attachmentIds);
+    return reply
+      .code(202)
+      .send(enqueue(req.params.id, b.baseRevisionId, "discuss", b));
+  },
+);
 app.post("/api/projects", async (req) => {
   const { name } = z
     .object({ name: z.string().trim().min(1).max(80) })
@@ -116,7 +194,7 @@ app.patch<{ Params: { id: string } }>("/api/projects/:id", async (req) => {
   const { name } = z
     .object({ name: z.string().trim().min(1).max(80) })
     .parse(req.body);
-  put("project", { ...p, name });
+  put("project", { ...p, name, updatedAt: now() });
   return project(p.id);
 });
 app.get<{ Params: { id: string } }>(
@@ -137,22 +215,48 @@ app.get<{ Params: { id: string } }>(
       activeJob: activeJob(p.id),
       render: latestRender(p.id),
       messages: list<any>("message", p.id),
+      proposals: list<Proposal>("proposal", p.id),
     };
   },
 );
 app.post<{ Params: { id: string } }>(
   "/api/projects/:id/generate",
   async (req, reply) => {
-    const b = z
-      .object({
-        baseRevisionId: z.string().uuid().nullable(),
-        prompt: z.string().trim().min(1).max(10000),
-        objectId: z.string().uuid().nullable().optional(),
-      })
+    const input = z
+      .union([
+        z.object({ proposalId: z.string().uuid() }),
+        z.object({
+          baseRevisionId: z.string().uuid().nullable(),
+          prompt: z.string().trim().min(1).max(10000),
+          objectId: z.string().uuid().nullable().optional(),
+        }),
+      ])
       .parse(req.body);
+    if ("proposalId" in input) {
+      project(req.params.id);
+      const proposal = get<Proposal>("proposal", input.proposalId);
+      if (!proposal || proposal.projectId !== req.params.id)
+        return reply.code(404).send({ error: "方案不存在" });
+      if (proposal.jobId && ["running", "succeeded"].includes(proposal.status))
+        return reply.code(202).send(get<Job>("job", proposal.jobId));
+      if (!["ready", "failed"].includes(proposal.status))
+        return reply
+          .code(409)
+          .send({ error: "方案已过期，请继续讨论以更新方案" });
+      validateAttachments(req.params.id, proposal.attachmentIds);
+      const j = enqueue(req.params.id, proposal.baseRevisionId, "generate", {
+        baseRevisionId: proposal.baseRevisionId,
+        prompt: proposal.description,
+        objectId: proposal.objectId,
+        attachmentIds: proposal.attachmentIds,
+        proposalId: proposal.id,
+      });
+      put("proposal", { ...proposal, jobId: j.id, status: "running" });
+      return reply.code(202).send(j);
+    }
     return reply
       .code(202)
-      .send(enqueue(req.params.id, b.baseRevisionId, "generate", b));
+      .send(enqueue(req.params.id, input.baseRevisionId, "generate", input));
   },
 );
 app.post<{ Params: { id: string } }>(
@@ -168,7 +272,15 @@ app.post<{ Params: { id: string } }>(
   "/api/projects/:id/render",
   async (req, reply) => {
     const b = z
-      .object({ baseRevisionId: z.string().uuid(), camera: cameraSchema })
+      .object({
+        baseRevisionId: z.string().uuid(),
+        camera: cameraSchema,
+        settings: renderSettingsSchema.default({
+          width: 1280,
+          height: 720,
+          transparent: false,
+        }),
+      })
       .parse(req.body);
     return reply
       .code(202)
@@ -266,6 +378,9 @@ else
   );
 reapInterruptedProcesses(path.join(DATA, "runtime-processes"));
 recoverInterrupted();
+collectUnusedImages();
+const attachmentSweep = setInterval(collectUnusedImages, 3600000);
+attachmentSweep.unref();
 await app.listen({ host: "127.0.0.1", port: PORT });
 console.log(`Ai-FormaDesk: http://127.0.0.1:${PORT}`);
 void checkEnvironment();

@@ -2,10 +2,11 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 export const ROOT = path.resolve(import.meta.dirname, "..");
-export const DATA = path.resolve(
+const configuredData = path.resolve(
   process.env.ZAOWU_DATA_DIR || path.join(ROOT, "data"),
 );
-fs.mkdirSync(DATA, { recursive: true, mode: 0o700 });
+fs.mkdirSync(configuredData, { recursive: true, mode: 0o700 });
+export const DATA = fs.realpathSync(configuredData);
 export const BLENDER =
   process.env.ZAOWU_BLENDER ||
   "/Applications/Blender 4.5 LTS.app/Contents/MacOS/Blender";

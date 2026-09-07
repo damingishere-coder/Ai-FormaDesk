@@ -107,7 +107,10 @@ export const cameraSchema = z
     target: vec3,
     up: vec3,
     fov: z.number().min(5).max(150),
-    aspect: z.number().min(0.2).max(5),
+    aspect: z
+      .number()
+      .min(1 / 16)
+      .max(16),
   })
   .refine(
     (v) => v.position.some((n, i) => Math.abs(n - v.target[i]) > 1e-6),
@@ -124,6 +127,12 @@ export type Project = {
   threadId: string | null;
   createdAt: string;
   redo: string[];
+  discussionThreadId?: string | null;
+  updatedAt?: string;
+  deletedAt?: string | null;
+  cleanupState?: "pending" | "failed" | null;
+  coverUrl?: string | null;
+  activeJob?: Job | null;
 };
 export type Revision = {
   id: string;
@@ -163,6 +172,51 @@ export type Render = {
   artifactId: string;
   camera: CameraSpec;
   createdAt: string;
+  settings?: RenderSettings;
+};
+export const renderSettingsSchema = z.object({
+  width: z.number().int().min(256).max(4096).default(1280),
+  height: z.number().int().min(256).max(4096).default(720),
+  transparent: z.boolean().default(false),
+});
+export type RenderSettings = z.infer<typeof renderSettingsSchema>;
+export const defaultRenderSettings: RenderSettings = {
+  width: 1280,
+  height: 720,
+  transparent: false,
+};
+export type Attachment = {
+  id: string;
+  projectId: string;
+  name: string;
+  size: number;
+  width: number;
+  height: number;
+  createdAt: string;
+  used: boolean;
+};
+export type Proposal = {
+  id: string;
+  projectId: string;
+  baseRevisionId: string | null;
+  objectId: string | null;
+  title: string;
+  description: string;
+  attachmentIds: string[];
+  status: "ready" | "stale" | "running" | "succeeded" | "failed";
+  jobId?: string;
+  createdAt: string;
+};
+export type Message = {
+  id: string;
+  projectId: string;
+  role: string;
+  text: string;
+  createdAt: string;
+  attachmentIds?: string[];
+  proposalId?: string;
+  jobId?: string;
+  status?: "pending" | "completed" | "failed" | "cancelled";
 };
 export type Snapshot = {
   project: Project;
@@ -171,5 +225,6 @@ export type Snapshot = {
   previewUrl: string | null;
   activeJob: Job | null;
   render: Render | null;
-  messages: { role: string; text: string; createdAt: string }[];
+  messages: Message[];
+  proposals: Proposal[];
 };

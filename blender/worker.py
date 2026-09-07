@@ -129,8 +129,8 @@ elif mode=='render':
     camdata=bpy.data.cameras.new('Forma_RenderCamera');cam=bpy.data.objects.new('Forma_RenderCamera',camdata);scene.collection.objects.link(cam);cam.matrix_world=Matrix(((right.x,up.x,back.x,pos.x),(right.y,up.y,back.y,pos.y),(right.z,up.z,back.z,pos.z),(0,0,0,1)));scene.camera=cam
     camdata.type='PERSP';camdata.sensor_fit='VERTICAL';camdata.sensor_height=24;camdata.lens=12/math.tan(math.radians(c['fov'])/2)
     scene.render.engine='BLENDER_EEVEE_NEXT'
-    scene.render.resolution_x=1280;scene.render.resolution_y=720;scene.render.resolution_percentage=100;scene.render.image_settings.file_format='PNG';scene.render.filepath=file('render.png')
-    scene.render.film_transparent=False
+    settings=c.get('settings',{});scene.render.resolution_x=settings.get('width',1280);scene.render.resolution_y=settings.get('height',720);scene.render.resolution_percentage=100;scene.render.image_settings.file_format='PNG';scene.render.filepath=file('render.png')
+    scene.render.film_transparent=bool(settings.get('transparent',False));scene.render.image_settings.color_mode='RGBA' if scene.render.film_transparent else 'RGB'
     if not scene.world:scene.world=bpy.data.worlds.new('世界')
     scene.world.use_nodes=True;bg=scene.world.node_tree.nodes.get('Background')
     if bg:bg.inputs['Color'].default_value=(.75,.78,.82,1);bg.inputs['Strength'].default_value=.5
