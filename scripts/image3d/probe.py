@@ -87,6 +87,9 @@ def main():
         with r.acquired():
             if args.case=='foreground':
                 stage('foreground',[runtime/'bin/foreground',job/'reference.png',job/'foreground'],[runtime/'bin'])
+                r.report['foreground']=json.loads((job/'foreground/instances.json').read_text())
+                r.report['foregroundRuntime']={'binarySha256':sha256(runtime/'bin/foreground')}
+                r.save()
             if args.case in ['shape','full']:
                 binary=runtime/'xcode-build/Build/Products/Release/hy3d'
                 metal=binary.parent/'mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib'

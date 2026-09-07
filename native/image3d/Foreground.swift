@@ -41,7 +41,16 @@ do {
         instances.append(["instance": instance, "foreground": name, "mask": maskName,
                           "width": fg.width, "height": fg.height])
     }
-    let data = try JSONSerialization.data(withJSONObject: ["instances": instances], options: [.sortedKeys])
+    let data = try JSONSerialization.data(withJSONObject: [
+        "algorithm": "VNGenerateForegroundInstanceMaskRequest",
+        "revision": request.revision,
+        "instanceCount": result.allInstances.count,
+        "truncated": result.allInstances.count > instances.count,
+        "instances": instances
+    ], options: [.sortedKeys])
+    // The supervisor reads this only after a successful exit. Foundation's
+    // atomic option uses a system replacement directory outside the job sandbox.
+    try data.write(to: output.appendingPathComponent("instances.json"))
     print(String(decoding: data, as: UTF8.self))
 } catch {
     let data = try! JSONSerialization.data(withJSONObject: ["error": String(describing: error)])
