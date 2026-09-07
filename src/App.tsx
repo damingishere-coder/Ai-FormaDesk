@@ -1,0 +1,884 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Box,
+  ChevronDown,
+  Check,
+  Undo2,
+  Redo2,
+  Download,
+  Image,
+  MousePointer2,
+  Move,
+  RotateCw,
+  Scaling,
+  Scan,
+  Layers,
+  History,
+  ArrowUp,
+  X,
+  Loader2,
+  AlertCircle,
+  Settings2,
+  EyeOff,
+  Lightbulb,
+  CheckCircle2,
+  Maximize,
+} from "lucide-react";
+import { api } from "./api";
+import { Viewport, type ViewportHandle } from "./Viewport";
+import { Inspector } from "./Inspector";
+import { Composer } from "./Composer";
+import { ProjectLibrary } from "./ProjectLibrary";
+import { ExportPanel } from "./ExportPanel";
+import {
+  defaultRenderSettings,
+  type RenderSettings,
+  type CameraSpec,
+  type Proposal,
+} from "./types";
+import type { Project, Snapshot, Job, SceneCommand, Revision } from "./types";
+const terminal = (j: Job) =>
+  ["succeeded", "failed", "cancelled"].includes(j.status);
+const shortDate = (s: string) =>
+  new Date(s).toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+export function App() {
+  const [pid, setPid] = useState(localStorage.getItem("forma-project") || ""),
+    [snapshot, setSnapshot] = useState<Snapshot | null>(null),
+    [health, setHealth] = useState<any>(null),
+    [selected, setSelected] = useState<string | null>(null),
+    [mode, setMode] = useState<"select" | "translate" | "rotate" | "scale">(
+      "select",
+    ),
+    [panel, setPanel] = useState(""),
+    [prompt, setPrompt] = useState(""),
+    [job, setJob] = useState<Job | null>(null),
+    [submitting, setSubmitting] = useState(false),
+    [error, setError] = useState(""),
+    [notice, setNotice] = useState(""),
+    [revisions, setRevisions] = useState<Revision[]>([]),
+    [renderView, setRenderView] = useState(false),
+    [view, setView] = useState("perspective"),
+    [reloadKey, setReloadKey] = useState(0);
+  const [chatExpanded, setChatExpanded] = useState(false);
+  const [showRender, setShowRender] = useState(false);
+  const [settings, setSettings] = useState<RenderSettings>(
+    defaultRenderSettings,
+  );
+  const [cameraState, setCameraState] = useState<CameraSpec | null>(null);
+  const onCameraChange = useCallback((v: CameraSpec) => {
+    setCameraState((old) =>
+      JSON.stringify(old) === JSON.stringify(v) ? old : v,
+    );
+  }, []);
+  const viewport = useRef<ViewportHandle>(null),
+    currentPid = useRef(pid),
+    submitLock = useRef(false);
+  currentPid.current = pid;
+  const busy = submitting || (!!job && !terminal(job));
+  const object = snapshot?.scene.objects.find((o) => o.id === selected);
+  const base = snapshot?.project.currentRevisionId || null;
+  const load = useCallback(async (id: string) => {
+    const v = await api<Snapshot>(`/projects/${id}/scene`);
+    if (currentPid.current !== id) return;
+    setSnapshot(v);
+    setSelected((s) => (v.scene.objects.some((o) => o.id === s) ? s : null));
+    if (v.activeJob) setJob(v.activeJob);
+    return v;
+  }, []);
+  const loadProjects = async () => {
+    const p = await api<Project[]>("/projects");
+    return p;
+  };
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const [p, h] = await Promise.all([loadProjects(), api("/health")]);
+        if (!alive) return;
+        setHealth(h);
+        if (
+          !currentPid.current ||
+          !p.some((x) => x.id === currentPid.current)
+        ) {
+          setPid("");
+          setPanel("projects");
+        }
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!pid) {
+      setSnapshot(null);
+      setJob(null);
+      localStorage.removeItem("forma-project");
+      return;
+    }
+    currentPid.current = pid;
+    localStorage.setItem("forma-project", pid);
+    setSnapshot(null);
+    setJob(null);
+    setSelected(null);
+    setRenderView(false);
+    setShowRender(false);
+    setChatExpanded(false);
+    setSettings(defaultRenderSettings);
+    setReloadKey(0);
+    void load(pid).catch((e) => setError(e.message));
+  }, [pid, load]);
+  useEffect(() => {
+    if (health?.checking) {
+      const timer = setInterval(
+        () => void api("/health").then(setHealth),
+        1800,
+      );
+      return () => clearInterval(timer);
+    }
+  }, [health?.checking]);
+  useEffect(() => {
+    if (!job || terminal(job)) return;
+    const jid = job.id,
+      p = job.projectId;
+    let disposed = false;
+    let ending = false;
+    const receive = async (j: Job) => {
+      if (disposed || currentPid.current !== p) return;
+      setJob(j);
+      if (terminal(j) && !ending) {
+        ending = true;
+        setSubmitting(false);
+        submitLock.current = false;
+        if (j.type !== "discuss" && j.type !== "render")
+          setReloadKey((k) => k + 1);
+        await load(p);
+        if (j.status === "succeeded") {
+          if (j.type !== "discuss")
+            setNotice(
+              j.type === "generate"
+                ? "建模已完成，详细结果保存在对话中。"
+                : j.message || "已保存",
+            );
+          if (j.type === "render") {
+            setRenderView(true);
+            setShowRender(true);
+            setPanel("");
+          }
+        } else setError(j.error || "任务已取消");
+      }
+    };
+    const source = new EventSource(`/api/jobs/${jid}/events`);
+    source.onmessage = (e) => void receive(JSON.parse(e.data));
+    source.onerror = () => {
+      void api<Job>(`/jobs/${jid}`)
+        .then(receive)
+        .catch((e) => setError(e.message));
+    };
+    const poll = setInterval(
+      () =>
+        void api<Job>(`/jobs/${jid}`)
+          .then(receive)
+          .catch((e) => setError(e.message)),
+      4000,
+    );
+    return () => {
+      disposed = true;
+      source.close();
+      clearInterval(poll);
+    };
+  }, [job?.id, job?.status, load]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (document.querySelector(".project-library")) return;
+      if (
+        target.closest("input,textarea,select,[contenteditable=true]") ||
+        busy
+      )
+        return;
+      const map: Record<string, typeof mode> = {
+        w: "translate",
+        e: "rotate",
+        r: "scale",
+      };
+      if (map[e.key.toLowerCase()]) {
+        setMode(map[e.key.toLowerCase()]);
+        e.preventDefault();
+      }
+      if (e.key === "Escape") {
+        setChatExpanded(false);
+        setShowRender(false);
+        setSelected(null);
+        setPanel("");
+      }
+      if (e.key.toLowerCase() === "f") viewport.current?.fit();
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [busy]);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(""), 5000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+  async function startJob(endpoint: string, body: unknown) {
+    if (submitLock.current || busy) return false;
+    submitLock.current = true;
+    setSubmitting(true);
+    setError("");
+    setNotice("");
+    const taskPid = pid;
+    try {
+      const j = await api<Job>(`/projects/${taskPid}/${endpoint}`, body);
+      if (currentPid.current !== taskPid) return true;
+      setJob(j);
+      // Accepted messages must not be resent just because refreshing the view failed.
+      await load(taskPid).catch((e) =>
+        setError("任务已提交，刷新状态失败：" + e.message),
+      );
+      return true;
+    } catch (e) {
+      if (currentPid.current === taskPid) {
+        setError((e as Error).message);
+        await load(taskPid).catch(() => {});
+        setReloadKey((k) => k + 1);
+      }
+      return false;
+    } finally {
+      setSubmitting(false);
+      submitLock.current = false;
+    }
+  }
+  async function discuss(text: string, attachmentIds: string[]) {
+    return (
+      (await startJob("discuss", {
+        baseRevisionId: base,
+        prompt: text,
+        objectId: selected,
+        attachmentIds,
+      })) || false
+    );
+  }
+  async function buildProposal(proposal: Proposal) {
+    await startJob("generate", { proposalId: proposal.id });
+  }
+  async function command(c: Partial<SceneCommand>, id = selected) {
+    if (!base || !id) return;
+    await startJob("commands", { ...c, objectId: id, baseRevisionId: base });
+  }
+  async function history(
+    action: "undo" | "redo" | "restore",
+    revisionId?: string,
+  ) {
+    if (busy) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      await api(`/projects/${pid}/restore`, {
+        baseRevisionId: base,
+        revisionId,
+        action,
+      });
+      await load(pid);
+      setReloadKey((k) => k + 1);
+      setNotice("已切换到保存版本");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+  async function openPanel(name: string) {
+    setPanel(panel === name ? "" : name);
+    if (name === "history")
+      setRevisions(await api(`/projects/${pid}/revisions`));
+    if (name === "projects") await loadProjects();
+  }
+  async function render() {
+    if (!base || !viewport.current) return;
+    await startJob("render", {
+      baseRevisionId: base,
+      camera: {
+        ...viewport.current.camera(),
+        fov: 42,
+        aspect: settings.width / settings.height,
+      },
+      settings,
+    });
+  }
+  const saved = !!snapshot && !busy;
+  const frameAspect =
+    settings.width > 0 && settings.height > 0
+      ? settings.width / settings.height
+      : 16 / 9;
+  const imageSettings = snapshot?.render?.settings || defaultRenderSettings;
+  const renderStale =
+    !!snapshot?.render &&
+    (snapshot.render.revisionId !== base ||
+      JSON.stringify(imageSettings) !== JSON.stringify(settings) ||
+      (!!cameraState &&
+        ["position", "target", "up"].some((k) =>
+          cameraState[k as "position"].some(
+            (n, i) =>
+              Math.abs(n - snapshot.render!.camera[k as "position"][i]) > 0.001,
+          ),
+        )));
+  return (
+    <div className="workbench">
+      <header className="topbar">
+        <a className="brand" href="/" aria-label="Ai-FormaDesk 首页">
+          <span className="brand-mark">
+            <Box size={26} strokeWidth={1.45} />
+          </span>
+          <span>Ai-FormaDesk</span>
+        </a>
+        <span className="divider" />
+        <button
+          className="project-trigger"
+          onClick={() => void openPanel("projects")}
+        >
+          <span>{snapshot?.project.name || "选择或新建作品"}</span>
+          <ChevronDown size={15} />
+        </button>
+        <span
+          className={"save-indicator " + (saved ? "saved" : "")}
+          title={saved ? "当前版本已保存到 Blender" : "等待任务确认"}
+        >
+          {busy ? (
+            <Loader2 size={15} className="spin" />
+          ) : (
+            <CheckCircle2 size={15} />
+          )}
+          <span>{busy ? "处理中" : base ? "已保存" : "空白项目"}</span>
+        </span>
+        <div className="top-actions">
+          <button
+            className="icon"
+            aria-label="撤销"
+            disabled={busy || !base}
+            onClick={() => void history("undo")}
+          >
+            <Undo2 size={20} />
+          </button>
+          <button
+            className="icon"
+            aria-label="重做"
+            disabled={busy || !snapshot?.project.redo.length}
+            onClick={() => void history("redo")}
+          >
+            <Redo2 size={20} />
+          </button>
+          <span className="action-separator" />
+          <button
+            className="button"
+            disabled={!base || busy}
+            onClick={() => {
+              setRenderView(true);
+              setChatExpanded(false);
+              void openPanel("render");
+            }}
+          >
+            <Image size={16} />
+            渲染出图
+          </button>
+          <button
+            className="button dark"
+            disabled={!base}
+            onClick={() => {
+              setRenderView(true);
+              setChatExpanded(false);
+              void openPanel("export");
+            }}
+          >
+            <Download size={16} />
+            导出
+          </button>
+        </div>
+      </header>
+      <main
+        className="canvas-stage"
+        aria-label="三维工作画布"
+        onPointerDown={() => setChatExpanded(false)}
+      >
+        {snapshot && (
+          <Viewport
+            key={pid}
+            ref={viewport}
+            url={
+              snapshot.previewUrl
+                ? snapshot.previewUrl + "?reload=" + reloadKey
+                : null
+            }
+            scene={snapshot.scene}
+            selected={selected}
+            readOnly={renderView}
+            onCameraChange={onCameraChange}
+            frameAspect={renderView ? frameAspect : undefined}
+            onSelect={setSelected}
+            mode={mode}
+            busy={busy}
+            onTransform={(id, t) =>
+              void command({ operation: "transform", transform: t }, id)
+            }
+            onError={setError}
+          />
+        )}
+      </main>
+      {renderView && base && (
+        <div className="preview-label glass">
+          实时材质预览 · 拖动旋转
+          {snapshot?.render && (
+            <button onClick={() => setShowRender(true)}>查看成品图</button>
+          )}
+        </div>
+      )}
+      {renderView && base && (
+        <div
+          className="frame-guide"
+          style={{
+            width: `min(100vw, calc(100vh * ${frameAspect}))`,
+            height: `min(100vh, calc(100vw / ${frameAspect}))`,
+          }}
+        >
+          <span>
+            {settings.width} × {settings.height}
+          </span>
+        </div>
+      )}
+      {showRender && snapshot?.render && (
+        <div
+          className="render-lightbox"
+          role="dialog"
+          aria-label="Blender 成品图"
+          onClick={() => setShowRender(false)}
+        >
+          <button
+            className="round glass"
+            aria-label="关闭成品图"
+            onClick={() => setShowRender(false)}
+          >
+            <X />
+          </button>
+          <img
+            src={`/api/artifacts/${snapshot.render.artifactId}`}
+            alt="Blender 成品图"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <div
+            className={"render-caption " + (renderStale ? "stale" : "")}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {renderStale
+              ? "需要重新渲染 · 场景、视角或设置已变化"
+              : "Blender · EEVEE"}
+            <span>
+              {imageSettings.width} × {imageSettings.height} ·{" "}
+              {imageSettings.transparent ? "透明背景" : "不透明背景"} · 版本{" "}
+              {snapshot.render.revisionId.slice(0, 8)}
+            </span>
+            <a
+              className="button"
+              href={`/api/artifacts/${snapshot.render.artifactId}?download=1`}
+            >
+              下载原图
+            </a>
+          </div>
+        </div>
+      )}
+      <div className="mode-switch glass">
+        <button
+          className={!renderView ? "active" : ""}
+          onClick={() => setRenderView(false)}
+        >
+          编辑
+        </button>
+        <button
+          className={renderView ? "active" : ""}
+          disabled={!base}
+          onClick={() => setRenderView(true)}
+        >
+          预览
+        </button>
+      </div>
+      {!base && !busy && snapshot && (
+        <div className="empty-state">
+          <div className="empty-cube">
+            <Box strokeWidth={0.8} size={66} />
+          </div>
+          <span className="eyebrow">想法，从这里成形</span>
+          <h1>
+            把脑海里的物件
+            <br />
+            放进眼前的空间。
+          </h1>
+          <p>聊聊想法，放入参考图，一起把细节想清楚。</p>
+          <button
+            className="example"
+            onClick={() => setPrompt("做一张木桌，桌上放一盏绿色台灯。")}
+          >
+            试试「木桌和绿色台灯」
+            <ArrowUp size={14} />
+          </button>
+        </div>
+      )}
+      {!renderView && (
+        <nav className="tool-rail glass" aria-label="建模工具">
+          {[
+            { mode: "select", label: "选择", key: "", icon: MousePointer2 },
+            { mode: "translate", label: "移动", key: "W", icon: Move },
+            { mode: "rotate", label: "旋转", key: "E", icon: RotateCw },
+            { mode: "scale", label: "缩放", key: "R", icon: Scaling },
+          ].map((t) => (
+            <button
+              key={t.mode}
+              className={"tool " + (mode === t.mode ? "active" : "")}
+              aria-label={t.label}
+              title={`${t.label} ${t.key}`}
+              disabled={busy}
+              onClick={() => setMode(t.mode as typeof mode)}
+            >
+              <t.icon size={22} strokeWidth={1.6} />
+            </button>
+          ))}
+          <span />
+          <button
+            className="tool"
+            aria-label="适应模型"
+            title="适应模型 F"
+            onClick={() => viewport.current?.fit()}
+          >
+            <Scan size={22} strokeWidth={1.6} />
+          </button>
+        </nav>
+      )}
+      {object && !renderView && (
+        <Inspector
+          key={object.id}
+          object={object}
+          busy={busy}
+          onClose={() => setSelected(null)}
+          onCommand={(c) => void command(c)}
+        />
+      )}
+      {(error || notice) && (
+        <div
+          className={"toast glass " + (error ? "error" : "")}
+          role={error ? "alert" : "status"}
+        >
+          {error ? <AlertCircle size={17} /> : <Check size={17} />}
+          <span>{error || notice}</span>
+          <button
+            className="icon"
+            aria-label="关闭提示"
+            onClick={() => {
+              setError("");
+              setNotice("");
+            }}
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
+      {snapshot && (
+        <Composer
+          key={pid}
+          snapshot={snapshot}
+          busy={busy}
+          job={job}
+          aiReady={!!health?.codex?.ok}
+          modelReady={!!health?.ok}
+          selected={selected}
+          expanded={chatExpanded}
+          onExpanded={setChatExpanded}
+          onDiscuss={discuss}
+          onBuild={(p) => void buildProposal(p)}
+          onStop={() => {
+            if (job)
+              void api(`/jobs/${job.id}/cancel`, {}).catch((e) =>
+                setError(e.message),
+              );
+          }}
+          onHealth={() => void openPanel("health")}
+          onError={setError}
+          suggested={prompt}
+        />
+      )}
+      <div className="bottom-left">
+        <button
+          className={"button glass " + (panel === "scene" ? "pressed" : "")}
+          onClick={() => void openPanel("scene")}
+        >
+          <Layers size={17} />
+          场景 · {snapshot?.scene.objects.length || 0}
+          <ChevronDown size={13} />
+        </button>
+        <button
+          className="round glass"
+          aria-label="版本历史"
+          onClick={() => void openPanel("history")}
+        >
+          <History size={20} />
+        </button>
+      </div>
+      <div className="bottom-right">
+        <button
+          className="round glass"
+          aria-label="环境检查"
+          onClick={() => void openPanel("health")}
+        >
+          <Settings2 size={18} />
+          {health && !health.ok && <i className="warning-dot" />}
+        </button>
+        <div className="view-picker glass">
+          <select
+            aria-label="观察视角"
+            value={view}
+            onChange={(e) => {
+              setView(e.target.value);
+              viewport.current?.view(e.target.value);
+            }}
+          >
+            <option value="perspective">透视视角</option>
+            <option value="front">正面</option>
+            <option value="side">侧面</option>
+            <option value="top">顶部</option>
+          </select>
+          <button
+            className="icon"
+            aria-label="适应画布"
+            onClick={() => viewport.current?.fit()}
+          >
+            <Maximize size={18} />
+          </button>
+        </div>
+      </div>
+      {panel === "scene" && (
+        <aside className="scene-popover glass">
+          <header>
+            <strong>场景对象</strong>
+            <button
+              className="icon"
+              onClick={() => setPanel("")}
+              aria-label="关闭场景列表"
+            >
+              <X size={16} />
+            </button>
+          </header>
+          {!snapshot?.scene.objects.length ? (
+            <p className="muted">还没有物件，先描述一个想法。</p>
+          ) : (
+            <div className="object-list">
+              {snapshot.scene.objects.map((o) => (
+                <button
+                  key={o.id}
+                  className={o.id === selected ? "active" : ""}
+                  data-object-id={o.id}
+                  onClick={() => {
+                    setSelected(o.id);
+                    setRenderView(false);
+                  }}
+                  style={{ paddingLeft: o.parentId ? 26 : 12 }}
+                >
+                  {o.type === "LIGHT" ? (
+                    <Lightbulb size={15} />
+                  ) : (
+                    <Box size={15} />
+                  )}
+                  <span>{o.name}</span>
+                  {!o.visible && <EyeOff size={13} />}
+                  <small>{o.id.slice(0, 4)}</small>
+                </button>
+              ))}
+            </div>
+          )}
+          <footer>
+            {snapshot?.scene.stats.vertices.toLocaleString() || 0} 顶点 ·{" "}
+            {snapshot?.scene.stats.triangles.toLocaleString() || 0} 三角面
+          </footer>
+        </aside>
+      )}
+      {panel === "projects" && (
+        <ProjectLibrary
+          currentId={pid}
+          onOpen={(id) => {
+            setPid(id);
+            setPanel("");
+            setPrompt("");
+          }}
+          onClose={() => setPanel("")}
+          onRemoved={(id) => {
+            if (id === pid) setPid("");
+          }}
+          onError={setError}
+        />
+      )}
+      {["export", "render"].includes(panel) && snapshot && (
+        <ExportPanel
+          snapshot={snapshot}
+          settings={settings}
+          onSettings={setSettings}
+          busy={busy}
+          stale={renderStale}
+          initial={panel === "render" ? "image" : "model"}
+          onRender={() => void render()}
+          onViewImage={() => {
+            setPanel("");
+            setShowRender(true);
+          }}
+          onClose={() => setPanel("")}
+        />
+      )}
+      {["history", "health"].includes(panel) && (
+        <div className="modal-backdrop" onClick={() => setPanel("")}>
+          <section
+            className={"modal glass " + (panel === "chat" ? "chat-modal" : "")}
+            role="dialog"
+            aria-modal="true"
+            aria-label={
+              {
+                projects: "项目",
+                history: "版本历史",
+                chat: "对话记录",
+                export: "导出作品",
+                health: "环境检查",
+              }[panel]
+            }
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header>
+              <h2>
+                {
+                  {
+                    projects: "你的作品",
+                    history: "每一步，都可以回去",
+                    chat: "创作对话",
+                    export: "带走你的作品",
+                    health: "本地工作台检查",
+                  }[panel]
+                }
+              </h2>
+              <button
+                className="icon"
+                aria-label="关闭窗口"
+                onClick={() => setPanel("")}
+              >
+                <X size={20} />
+              </button>
+            </header>
+            {panel === "history" && (
+              <>
+                <p className="muted">
+                  每次成功修改保存一个独立版本。恢复后继续创作，原历史依然保留。
+                </p>
+                <div className="revision-list">
+                  {[...revisions].reverse().map((r) => (
+                    <div key={r.id} className={r.id === base ? "current" : ""}>
+                      <span className="revision-dot" />
+                      <div>
+                        <strong>{r.label}</strong>
+                        <small>
+                          {shortDate(r.createdAt)} · {r.id.slice(0, 8)} ·{" "}
+                          {r.source === "generate" ? "AI 建模" : "网页编辑"}
+                        </small>
+                      </div>
+                      <button
+                        className="button"
+                        disabled={busy || r.id === base}
+                        onClick={() => void history("restore", r.id)}
+                      >
+                        {r.id === base ? "当前" : "恢复"}
+                      </button>
+                    </div>
+                  ))}
+                  {!revisions.length && (
+                    <p className="muted">第一个作品生成后，这里会留下记录。</p>
+                  )}
+                </div>
+              </>
+            )}
+            {panel === "health" && (
+              <>
+                <p className="muted">
+                  AI 复用本机 Codex 登录；建模和文件保存在本机。
+                </p>
+                {health ? (
+                  <div className="health-list">
+                    {[
+                      [
+                        "Codex CLI",
+                        health.codex?.ok,
+                        health.codex?.version || health.codex?.error,
+                      ],
+                      [
+                        "模型与登录",
+                        health.codex?.ok,
+                        `${health.codex?.model || "gpt-6-astra"} · high${health.codex?.loggedIn ? " · 已登录" : ""}`,
+                      ],
+                      [
+                        "Blender 4.5 LTS",
+                        health.blender?.ok,
+                        health.blender?.version || health.blender?.error,
+                      ],
+                      [
+                        "执行沙箱",
+                        health.sandbox?.ok,
+                        health.sandbox?.ok
+                          ? "越界读取、写入和网络均已实测阻止"
+                          : health.sandbox?.error || "检查中",
+                      ],
+                    ].map(([name, ok, detail]) => (
+                      <div key={String(name)}>
+                        {ok ? (
+                          <CheckCircle2 className="green" size={19} />
+                        ) : (
+                          <AlertCircle className="amber" size={19} />
+                        )}
+                        <span>
+                          <strong>{name}</strong>
+                          <small>{detail}</small>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p>正在检查…</p>
+                )}
+                <p className="field-note">
+                  配置入口：项目 data/settings.json 可调整执行超时；Blender
+                  路径使用 ZAOWU_BLENDER，Codex 路径使用
+                  ZAOWU_CODEX。修改后重启工作台。登录问题请在终端运行 codex
+                  login status 检查。
+                </p>
+                <button
+                  className="button dark"
+                  disabled={health?.checking}
+                  onClick={() => {
+                    setHealth({ ...health, checking: true });
+                    void api("/health/recheck", {})
+                      .then(setHealth)
+                      .catch((e) => setError(e.message));
+                  }}
+                >
+                  {health?.checking ? (
+                    <Loader2 size={16} className="spin" />
+                  ) : (
+                    <RotateCw size={16} />
+                  )}
+                  重新检查
+                </button>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
