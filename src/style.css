@@ -1996,3 +1996,5 @@ small {
 
 .auxiliary-reference { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-size: 13px; }
 .auxiliary-reference img { object-fit: contain; border-radius: 6px; }
+
+.stage-measurement { font-size: 11px; color: #78837b; white-space: nowrap; flex-shrink: 0; }

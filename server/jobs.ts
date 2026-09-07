@@ -63,11 +63,26 @@ export function artifactPath(id: string) {
   return real;
 }
 function update(j: Job, values: Partial<Job>) {
-  Object.assign(j, values, { updatedAt: now() });
-  if (values.stage)
+  if (values.stage && values.stage !== j.stage) {
     j.events = [...(j.events || []), { stage: values.stage, at: now() }];
+    j.stageTiming = undefined;
+  }
+  Object.assign(j, values, { updatedAt: now() });
   put("job", j);
   jobEvents.emit(j.id, j);
+}
+function imageStageTiming(report: any): Job["stageTiming"] {
+  const stage = report.stages?.at(-1);
+  if (
+    report.status === "queued" ||
+    report.shapeReviewPending !== undefined ||
+    !Number.isFinite(stage?.startedAt)
+  )
+    return undefined;
+  return {
+    startedAt: stage.startedAt,
+    seconds: stage.status === "running" ? undefined : stage.seconds,
+  };
 }
 export function assertBase(pid: string, base: string | null) {
   const p = project(pid);
@@ -549,6 +564,7 @@ async function perform(
         (value) => {
           const phase = value.stages?.at(-1)?.stage;
           update(j, {
+            stageTiming: imageStageTiming(value),
             stage:
               value.status === "queued"
                 ? "等待本机计算资源"
@@ -664,7 +680,10 @@ async function perform(
                           bake: "烘焙纹理与多角度检查",
                         } as Record<string, string>
                       )[phase] || "准备纹理工作流";
-          const values: Partial<Job> = { stage };
+          const values: Partial<Job> = {
+            stage,
+            stageTiming: imageStageTiming(report),
+          };
           if (phase.startsWith("fit-review-"))
             values.stage = "匹配原照相机与生成形体对照图";
           const file = report.shapePreviewFile || "shape-preview.glb";
@@ -835,6 +854,7 @@ async function perform(
             signal,
             (value) =>
               update(j, {
+                stageTiming: imageStageTiming(value),
                 stage:
                   value.status === "queued"
                     ? "等待本机计算资源"

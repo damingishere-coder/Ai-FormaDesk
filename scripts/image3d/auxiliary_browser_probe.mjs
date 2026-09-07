@@ -74,11 +74,12 @@ try {
       if (!cancel.ok) throw new Error(await cancel.text());
       const remove = await fetch(
         `/api/projects/${pid}/attachments/${auxiliaryId}`,
-        { method: "DELETE", headers },
+        { method: "DELETE", headers: { "X-Forma-Session": token } },
       );
       const scene = await (await fetch(`/api/projects/${pid}/scene`)).json();
       return {
         usedAttachmentProtected: remove.status === 409,
+        deleteStatus: remove.status,
         revisionId: scene.project.currentRevisionId,
       };
     },

@@ -87,6 +87,26 @@ export function Composer({
   const [lightbox, setLightbox] = useState<string | null>(null),
     [newReply, setNewReply] = useState(false),
     [dragOver, setDragOver] = useState(false);
+  const [clock, setClock] = useState(Date.now());
+  const localImageJob =
+    !!job && ["image3d", "surface-refine", "prepare-image"].includes(job.type);
+  useEffect(() => {
+    if (!busy || !localImageJob) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [busy, localImageJob]);
+  const seconds = job?.stageTiming
+    ? Math.max(
+        0,
+        Math.floor(
+          job.stageTiming.seconds ?? clock / 1000 - job.stageTiming.startedAt,
+        ),
+      )
+    : null;
+  const measuredTime =
+    seconds === null
+      ? "耗时正在测量"
+      : `本阶段 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
   const list = useRef<HTMLDivElement>(null),
     nearBottom = useRef(true),
     chooser = useRef<HTMLInputElement>(null),
@@ -443,6 +463,14 @@ export function Composer({
                 ? `正在讨论：${object.name}`
                 : "先讨论想法，确认方案后再建模。"}
           </span>
+          {busy && localImageJob && (
+            <small className="stage-measurement">
+              {job?.status === "queued" ||
+              job?.stage.includes("等待本机计算资源")
+                ? "排队时间不计入处理预算"
+                : measuredTime}
+            </small>
+          )}
           {busy && <Loader2 size={14} className="spin" />}
         </div>
         <form
@@ -459,7 +487,16 @@ export function Composer({
                     <img src={a.url} alt={`待发送图 ${i + 1}`} />
                   </button>
                   <span>图 {i + 1}</span>
-                  {a.id && <button className="prepare-image-action" type="button" disabled={busy} onClick={() => onPrepare(a.id!)}>准备主体</button>}
+                  {a.id && (
+                    <button
+                      className="prepare-image-action"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => onPrepare(a.id!)}
+                    >
+                      准备主体
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="remove-image"

@@ -172,6 +172,7 @@ export type Job = {
   candidateManifest?: Scene;
   candidateCanAdopt?: boolean;
   startedAt?: string;
+  stageTiming?: { startedAt: number; seconds?: number };
   events?: { stage: string; at: string }[];
 };
 export type Render = {
