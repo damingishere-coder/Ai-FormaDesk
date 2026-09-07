@@ -1,0 +1,175 @@
+import { z } from "zod";
+export const vec3 = z.tuple([
+  z.number().finite(),
+  z.number().finite(),
+  z.number().finite(),
+]);
+export const transformSchema = z.object({
+  position: vec3,
+  rotation: vec3,
+  scale: vec3,
+});
+export const materialSchema = z.object({
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  roughness: z.number().min(0).max(1),
+  metalness: z.number().min(0).max(1),
+});
+export const objectSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().max(256),
+  type: z.enum([
+    "MESH",
+    "EMPTY",
+    "LIGHT",
+    "CAMERA",
+    "CURVE",
+    "FONT",
+    "SURFACE",
+    "META",
+  ]),
+  parentId: z.string().uuid().nullable(),
+  transform: transformSchema,
+  matrix: z.array(z.number().finite()).length(16),
+  visible: z.boolean(),
+  material: materialSchema.nullable(),
+  light: z
+    .object({
+      type: z.enum(["POINT", "SUN"]),
+      color: z.string(),
+      energy: z.number().finite().min(0),
+    })
+    .nullable(),
+});
+export const sceneSchema = z
+  .object({
+    objects: z.array(objectSchema).max(1500),
+    stats: z.object({
+      objects: z.number().int().min(0),
+      vertices: z.number().int().min(0),
+      triangles: z.number().int().min(0),
+    }),
+    units: z.literal("meters"),
+    coordinates: z.literal("blender-z-up"),
+  })
+  .superRefine((s, c) => {
+    const ids = new Set(s.objects.map((o) => o.id));
+    if (ids.size !== s.objects.length)
+      c.addIssue({ code: "custom", message: "重复对象 ID" });
+    for (const o of s.objects)
+      if (o.parentId && !ids.has(o.parentId))
+        c.addIssue({ code: "custom", message: "父对象不存在" });
+  });
+export const commandSchema = z
+  .object({
+    baseRevisionId: z.string().uuid(),
+    objectId: z.string().uuid(),
+    operation: z.enum([
+      "transform",
+      "material",
+      "light",
+      "duplicate",
+      "delete",
+      "visibility",
+      "rename",
+    ]),
+    transform: transformSchema.optional(),
+    material: materialSchema.optional(),
+    light: z
+      .object({
+        color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+        energy: z.number().min(0).max(1e6),
+      })
+      .optional(),
+    visible: z.boolean().optional(),
+    name: z.string().min(1).max(120).optional(),
+  })
+  .superRefine((v, c) => {
+    const field = (
+      {
+        transform: "transform",
+        material: "material",
+        light: "light",
+        visibility: "visible",
+        rename: "name",
+      } as const
+    )[v.operation as "transform"];
+    if (field && v[field] === undefined)
+      c.addIssue({ code: "custom", message: `缺少 ${field}` });
+    if (
+      v.transform &&
+      v.transform.scale.some((n) => Math.abs(n) < 0.001 || Math.abs(n) > 1000)
+    )
+      c.addIssue({ code: "custom", message: "缩放必须在 0.001～1000 范围内" });
+  });
+export const cameraSchema = z
+  .object({
+    position: vec3,
+    target: vec3,
+    up: vec3,
+    fov: z.number().min(5).max(150),
+    aspect: z.number().min(0.2).max(5),
+  })
+  .refine(
+    (v) => v.position.some((n, i) => Math.abs(n - v.target[i]) > 1e-6),
+    "相机位置不能与目标重合",
+  );
+export type SceneObject = z.infer<typeof objectSchema>;
+export type Scene = z.infer<typeof sceneSchema>;
+export type SceneCommand = z.infer<typeof commandSchema>;
+export type CameraSpec = z.infer<typeof cameraSchema>;
+export type Project = {
+  id: string;
+  name: string;
+  currentRevisionId: string | null;
+  threadId: string | null;
+  createdAt: string;
+  redo: string[];
+};
+export type Revision = {
+  id: string;
+  projectId: string;
+  parentId: string | null;
+  source: string;
+  label: string;
+  createdAt: string;
+  scene: Scene;
+  artifacts: {
+    blend: string;
+    glb: string;
+    script: string;
+    manifest: string;
+    log: string;
+  };
+};
+export type Job = {
+  id: string;
+  projectId: string;
+  baseRevisionId: string | null;
+  type: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  stage: string;
+  error: string | null;
+  resultRevisionId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  message: string;
+  renderArtifactId?: string;
+  events?: { stage: string; at: string }[];
+};
+export type Render = {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  artifactId: string;
+  camera: CameraSpec;
+  createdAt: string;
+};
+export type Snapshot = {
+  project: Project;
+  revision: Revision | null;
+  scene: Scene;
+  previewUrl: string | null;
+  activeJob: Job | null;
+  render: Render | null;
+  messages: { role: string; text: string; createdAt: string }[];
+};

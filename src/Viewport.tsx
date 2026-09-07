@@ -1,0 +1,375 @@
+import { Canvas, useThree } from "@react-three/fiber";
+import {
+  OrbitControls,
+  TransformControls,
+  Grid,
+  ContactShadows,
+  GizmoHelper,
+  GizmoViewport,
+} from "@react-three/drei";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useImperativeHandle,
+  forwardRef,
+  Suspense,
+} from "react";
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import type { CameraSpec, Scene, SceneCommand } from "./types";
+export type ViewportHandle = {
+  camera: () => CameraSpec;
+  view: (v: string) => void;
+  fit: () => void;
+};
+export type ViewportProps = {
+  url: string | null;
+  scene: Scene;
+  selected: string | null;
+  onSelect: (id: string | null) => void;
+  mode: "select" | "translate" | "rotate" | "scale";
+  busy: boolean;
+  onTransform: (id: string, t: SceneCommand["transform"]) => void;
+  onError: (s: string) => void;
+};
+const C = new THREE.Matrix4().makeRotationX(-Math.PI / 2),
+  Ci = C.clone().invert();
+export function blenderTransform(m: THREE.Matrix4) {
+  const local = Ci.clone().multiply(m).multiply(C);
+  const p = new THREE.Vector3(),
+    q = new THREE.Quaternion(),
+    s = new THREE.Vector3();
+  local.decompose(p, q, s);
+  const e = new THREE.Euler().setFromQuaternion(q, "XYZ");
+  return {
+    position: p.toArray(),
+    rotation: [e.x, e.y, e.z] as [number, number, number],
+    scale: s.toArray(),
+  };
+}
+function Content({
+  props,
+  handle,
+}: {
+  props: ViewportProps;
+  handle: React.ForwardedRef<ViewportHandle>;
+}) {
+  const { camera, gl, invalidate, size } = useThree();
+  const orbit = useRef<any>(null);
+  const transform = useRef<any>(null);
+  const [group, setGroup] = useState<THREE.Group | null>(null);
+  const [objects, setObjects] = useState(new Map<string, THREE.Object3D>());
+  const bounds = useRef(new THREE.Box3());
+  const dragging = useRef(false);
+  const clickStart = useRef<[number, number]>([0, 0]);
+  const fit = () => {
+    const b = bounds.current;
+    if (b.isEmpty()) return;
+    const center = b.getCenter(new THREE.Vector3()),
+      size = b.getSize(new THREE.Vector3());
+    const d = Math.max(size.x, size.y, size.z, 1) * 1.3;
+    camera.position.copy(center).add(new THREE.Vector3(d, d * 0.7, d));
+    camera.up.set(0, 1, 0);
+    orbit.current?.target.copy(center);
+    orbit.current?.update();
+    invalidate();
+  };
+  useImperativeHandle(
+    handle,
+    () => ({
+      camera: () => ({
+        position: camera.position.toArray(),
+        target: orbit.current.target.toArray(),
+        up: camera.up.toArray(),
+        fov: (camera as THREE.PerspectiveCamera).fov,
+        aspect: (camera as THREE.PerspectiveCamera).aspect,
+      }),
+      fit,
+      view: (v) => {
+        if (v === "perspective") {
+          fit();
+          return;
+        }
+        const center = bounds.current.isEmpty()
+          ? new THREE.Vector3()
+          : bounds.current.getCenter(new THREE.Vector3());
+        const d = Math.max(camera.position.distanceTo(orbit.current.target), 3);
+        const axes: Record<string, number[]> = {
+          front: [0, 0, 1],
+          side: [1, 0, 0],
+          top: [0, 1, 0.0001],
+        };
+        const a = axes[v] || axes.front;
+        camera.position
+          .copy(center)
+          .add(new THREE.Vector3(...a).multiplyScalar(d));
+        camera.up.set(0, 1, 0);
+        orbit.current.target.copy(center);
+        orbit.current.update();
+        invalidate();
+      },
+    }),
+    [group],
+  );
+  useEffect(() => {
+    if (!props.url) {
+      setGroup(null);
+      setObjects(new Map());
+      return;
+    }
+    let alive = true;
+    let loaded: THREE.Group | undefined;
+    const dispose = (g: THREE.Group) =>
+      g.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry.dispose();
+          for (const m of Array.isArray(o.material)
+            ? o.material
+            : [o.material]) {
+            Object.values(m).forEach((v) => {
+              if (v instanceof THREE.Texture) v.dispose();
+            });
+            m.dispose();
+          }
+        }
+      });
+    new GLTFLoader().load(
+      props.url,
+      (gltf) => {
+        loaded = gltf.scene;
+        if (!alive) {
+          dispose(loaded);
+          return;
+        }
+        const map = new Map<string, THREE.Object3D>();
+        loaded.traverse((o) => {
+          if (o.userData.forma_id) map.set(o.userData.forma_id, o);
+          if (o instanceof THREE.Mesh) {
+            o.castShadow = true;
+            o.receiveShadow = true;
+          }
+        });
+        props.scene.objects.forEach((o) => {
+          const node = map.get(o.id);
+          if (node) {
+            node.visible = o.visible;
+            if (o.type === "LIGHT" && o.light) {
+              node.traverse((n) => {
+                if (n instanceof THREE.Light)
+                  n.intensity =
+                    o.light!.type === "SUN"
+                      ? o.light!.energy
+                      : Math.min(o.light!.energy * 0.025, 80);
+              });
+            }
+          }
+        });
+        bounds.current.makeEmpty();
+        loaded.updateMatrixWorld(true);
+        loaded.traverse((o) => {
+          if (
+            o instanceof THREE.Mesh &&
+            o.visible &&
+            !/地面|floor|ground|背景/i.test(o.name)
+          ) {
+            o.geometry.computeBoundingBox();
+            if (o.geometry.boundingBox)
+              bounds.current.union(
+                o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld),
+              );
+          }
+        });
+        setGroup(loaded);
+        setObjects(map);
+      },
+      undefined,
+      (e) => {
+        if (alive) props.onError("真实 GLB 加载失败：" + String(e));
+      },
+    );
+    return () => {
+      alive = false;
+      if (loaded) dispose(loaded);
+    };
+  }, [props.url]);
+  const fitted = useRef(false);
+  useEffect(() => {
+    if (group && !fitted.current) {
+      fit();
+      fitted.current = true;
+    }
+  }, [group]);
+  const selected = props.selected ? objects.get(props.selected) : undefined;
+  const pivot = useMemo(() => new THREE.Object3D(), []);
+  const pivotStart = useRef(new THREE.Matrix4());
+  const objectStart = useRef(new THREE.Matrix4());
+  useEffect(() => {
+    if (!selected) return;
+    selected.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(selected);
+    if (box.isEmpty()) selected.getWorldPosition(pivot.position);
+    else box.getCenter(pivot.position);
+    selected.getWorldQuaternion(pivot.quaternion);
+    pivot.scale.set(1, 1, 1);
+    pivot.updateMatrixWorld(true);
+  }, [selected, group, props.busy, pivot]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const helper = new THREE.BoxHelper(selected, 0x1977ff);
+    helper.renderOrder = 1000;
+    (helper.material as THREE.LineBasicMaterial).depthTest = false;
+    gl.domElement.style.cursor = "default";
+    const parent = group?.parent;
+    parent?.add(helper);
+    let raf = 0;
+    const frame = () => {
+      helper.update();
+      raf = requestAnimationFrame(frame);
+    };
+    frame();
+    return () => {
+      cancelAnimationFrame(raf);
+      parent?.remove(helper);
+      helper.geometry.dispose();
+      (helper.material as THREE.Material).dispose();
+    };
+  }, [selected, group]);
+  return (
+    <>
+      <color attach="background" args={["#f8f8f6"]} />
+      <ambientLight intensity={1.2} />
+      <directionalLight position={[4, 7, 5]} intensity={2.5} />
+      <directionalLight position={[-4, 3, -3]} intensity={1} />
+      <Grid
+        infiniteGrid
+        position={[0, -0.006, 0]}
+        cellSize={0.25}
+        sectionSize={1}
+        cellColor="#dfdfdc"
+        sectionColor="#cfcfca"
+        cellThickness={0.5}
+        sectionThickness={0.8}
+        fadeDistance={20}
+        fadeStrength={1.5}
+      />
+      {group && (
+        <primitive
+          object={group}
+          onPointerDown={(e: any) => {
+            clickStart.current = [e.clientX, e.clientY];
+          }}
+          onClick={(e: any) => {
+            if (
+              dragging.current ||
+              Math.hypot(
+                e.clientX - clickStart.current[0],
+                e.clientY - clickStart.current[1],
+              ) > 4
+            )
+              return;
+            e.stopPropagation();
+            let n = e.object;
+            while (n && !n.userData.forma_id) n = n.parent;
+            props.onSelect(n?.userData.forma_id || null);
+          }}
+        />
+      )}
+      {group && (
+        <ContactShadows
+          key={props.url || "empty"}
+          position={[0, -0.003, 0]}
+          opacity={0.3}
+          scale={20}
+          blur={2.5}
+          far={8}
+          resolution={512}
+          frames={1}
+        />
+      )}
+      <OrbitControls
+        ref={orbit}
+        makeDefault
+        enableDamping
+        dampingFactor={0.1}
+        minDistance={0.2}
+        maxDistance={150}
+      />
+      <primitive object={pivot} />
+      {selected && props.mode !== "select" && !props.busy && (
+        <TransformControls
+          ref={transform}
+          object={pivot}
+          mode={props.mode}
+          space="local"
+          size={0.85}
+          onMouseDown={() => {
+            dragging.current = true;
+            selected.updateWorldMatrix(true, true);
+            pivot.updateMatrixWorld(true);
+            pivotStart.current.copy(pivot.matrixWorld);
+            objectStart.current.copy(selected.matrixWorld);
+          }}
+          onObjectChange={() => {
+            if (!dragging.current) return;
+            pivot.updateMatrixWorld(true);
+            const local = pivot.matrixWorld
+              .clone()
+              .multiply(pivotStart.current.clone().invert())
+              .multiply(objectStart.current);
+            if (selected.parent)
+              local.premultiply(selected.parent.matrixWorld.clone().invert());
+            local.decompose(
+              selected.position,
+              selected.quaternion,
+              selected.scale,
+            );
+            selected.updateMatrixWorld(true);
+          }}
+          onMouseUp={() => {
+            selected.updateMatrix();
+            props.onTransform(
+              props.selected!,
+              blenderTransform(selected.matrix),
+            );
+            setTimeout(() => {
+              dragging.current = false;
+            }, 100);
+          }}
+        />
+      )}
+      <GizmoHelper
+        alignment="top-right"
+        margin={[58, Math.min(160, size.height * 0.15)]}
+      >
+        <GizmoViewport
+          axisColors={["#dc655e", "#6ba684", "#6398eb"]}
+          labelColor="#fff"
+        />
+      </GizmoHelper>
+    </>
+  );
+}
+export const Viewport = forwardRef<ViewportHandle, ViewportProps>(
+  (props, ref) => (
+    <Canvas
+      shadows
+      camera={{ position: [5, 3.5, 5], fov: 42, near: 0.01, far: 1000 }}
+      dpr={[1, 2]}
+      onPointerMissed={(e) => {
+        if (e.type === "click") props.onSelect(null);
+      }}
+      gl={{
+        antialias: true,
+        powerPreference: "high-performance",
+        preserveDrawingBuffer: true,
+      }}
+    >
+      <Suspense fallback={null}>
+        <Content props={props} handle={ref} />
+      </Suspense>
+    </Canvas>
+  ),
+);
