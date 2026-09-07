@@ -1,17 +1,23 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "./api";
-import type { PreparedImage } from "./types";
+import { api, uploadAttachment } from "./api";
+import type { PreparedImage, Attachment } from "./types";
 
 export function ImagePreparation({
   image,
   onClose,
   onSaved,
   onGenerate,
+  generationUnavailable,
 }: {
   image: PreparedImage;
   onClose: () => void;
   onSaved: (image: PreparedImage) => void;
-  onGenerate: (image: PreparedImage, prompt: string) => Promise<void>;
+  onGenerate: (
+    image: PreparedImage,
+    prompt: string,
+    attachmentIds: string[],
+  ) => Promise<void>;
+  generationUnavailable?: string;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const mask = useRef(document.createElement("canvas"));
@@ -31,6 +37,8 @@ export function ImagePreparation({
   const [prompt, setPrompt] = useState(
     "按主图还原主体，保留原有颜色、花纹和结构。",
   );
+  const [auxiliary, setAuxiliary] = useState<Attachment[]>([]);
+  const [uploading, setUploading] = useState(false);
   const url = (id: string) =>
     `/api/projects/${image.projectId}/attachments/${id}`;
   const repaint = () => {
@@ -130,7 +138,12 @@ export function ImagePreparation({
         { mask: mask.current.toDataURL("image/png"), crop },
       );
       onSaved(saved);
-      if (generate) await onGenerate(saved, prompt);
+      if (generate)
+        await onGenerate(
+          saved,
+          prompt,
+          auxiliary.map((a) => a.id),
+        );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -250,17 +263,77 @@ export function ImagePreparation({
             onChange={(e) => setPrompt(e.target.value)}
           />
         </label>
+        <label>
+          辅助参考图（可选，最多 5 张）
+          <input
+            type="file"
+            aria-label="辅助参考图"
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            disabled={saving || uploading || auxiliary.length >= 5}
+            onChange={async (e) => {
+              const files = Array.from(e.currentTarget.files || []);
+              e.currentTarget.value = "";
+              if (files.length + auxiliary.length > 5) {
+                setError("辅助参考图最多 5 张");
+                return;
+              }
+              setUploading(true);
+              setError("");
+              try {
+                for (const file of files) {
+                  const attachment = await uploadAttachment<Attachment>(
+                    image.projectId,
+                    file,
+                  );
+                  setAuxiliary((current) => [...current, attachment]);
+                }
+              } catch (error) {
+                setError((error as Error).message);
+              } finally {
+                setUploading(false);
+              }
+            }}
+          />
+        </label>
+        {auxiliary.map((a) => (
+          <div key={a.id} className="auxiliary-reference">
+            <img src={url(a.id)} alt={a.name} width="48" height="48" />
+            <span>{a.name}</span>
+            <button
+              disabled={saving || uploading}
+              onClick={() =>
+                setAuxiliary((current) => current.filter((v) => v.id !== a.id))
+              }
+            >
+              移除
+            </button>
+          </div>
+        ))}
+        <p>
+          当前主体图为主图。辅助图帮助核对结构和颜色描述，不直接参与多视图形体重建。
+        </p>
         <p>
           图生建模仍为实验性。优先保留原图可见区域，再补齐侧背面；未通过对照检查的结果会保留为候选。
         </p>
         {error && <p role="alert">{error}</p>}
+        {generationUnavailable && <p role="status">{generationUnavailable}</p>}
         <footer>
-          <button disabled={!ready || saving} onClick={() => void save(false)}>
+          <button
+            disabled={!ready || saving || uploading}
+            onClick={() => void save(false)}
+          >
             保存主体
           </button>
           <button
             className="button dark"
-            disabled={!ready || saving || !prompt.trim()}
+            disabled={
+              !ready ||
+              saving ||
+              uploading ||
+              !prompt.trim() ||
+              !!generationUnavailable
+            }
             onClick={() => void save(true)}
           >
             {saving ? "正在处理…" : "生成形体与表面候选"}

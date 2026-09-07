@@ -7,6 +7,7 @@ import { assertExecution, environment } from "./environment";
 import { codex } from "./codex";
 import { attachmentPath, validateAttachments } from "./attachments";
 import { prepareImage, preparedImage, runImageProbe } from "./image3d";
+import { correctionMask } from "./image-correction";
 import {
   db,
   put,
@@ -172,6 +173,12 @@ export function enqueue(
   if (type === "image3d") {
     const input = preparedImage(pid, payload.preparedImageId);
     if (input.status !== "ready") throw new Error("请先选择并确认主体蒙版");
+    validateAttachments(pid, [
+      ...new Set<string>([
+        input.attachmentId,
+        ...(payload.attachmentIds || []),
+      ]),
+    ]);
     if (
       !environment.image3d?.shape?.installationReady ||
       !environment.image3d?.texture?.installationReady
@@ -184,7 +191,7 @@ export function enqueue(
       !candidate ||
       candidate.projectId !== pid ||
       candidate.baseRevisionId !== base ||
-      !candidate.candidateManifest ||
+      (!candidate.candidateManifest && !candidate.candidateCanAdopt) ||
       candidate.status !== "partial" ||
       candidate.resultRevisionId
     )
@@ -237,9 +244,16 @@ export function enqueue(
     );
   if (type === "image3d") {
     const input = preparedImage(pid, payload.preparedImageId);
+    const images = validateAttachments(pid, [
+      ...new Set<string>([
+        input.attachmentId,
+        ...(payload.attachmentIds || []),
+      ]),
+    ]);
+    for (const image of images) put("attachment", { ...image, used: true });
     addMessage(pid, "user", payload.prompt, {
       jobId: j.id,
-      attachmentIds: [input.attachmentId],
+      attachmentIds: images.map((image) => image.id),
     });
   }
   if (type === "discuss") {
@@ -431,6 +445,7 @@ async function perform(
       return;
     }
     let scene;
+    let outputDirectory: string | undefined;
     let script = "";
     let summary = "";
     let imageProvenance: Record<string, unknown> | undefined;
@@ -446,15 +461,42 @@ async function perform(
         throw new Error("候选与当前作品不一致");
       const source = path.join(DATA, "jobs", original.id, "attempt-0");
       if (candidate.directory !== source) throw new Error("候选目录无效");
-      scene = checkFiles(source);
-      for (const name of [
-        "scene.blend",
-        "scene.glb",
-        "scene.json",
-        "generated.py",
-        "execution.log",
-      ])
-        fs.copyFileSync(path.join(source, name), path.join(dir, name));
+      if (candidate.kind === "shape") {
+        if (!/^geometry-[01]\.blend$/.test(candidate.geometryFile))
+          throw new Error("形体候选文件无效");
+        const geometry = path.join(source, "inference", candidate.geometryFile);
+        if (fs.realpathSync(geometry) !== geometry)
+          throw new Error("形体候选不允许符号链接");
+        fs.copyFileSync(geometry, path.join(dir, "subject.blend"));
+        fs.writeFileSync(
+          path.join(dir, "command.json"),
+          JSON.stringify({
+            objectId: candidate.objectId,
+            name: "待精修的形体候选",
+          }),
+        );
+        fs.writeFileSync(
+          path.join(dir, "generated.py"),
+          fs.readFileSync(path.join(ROOT, "blender/worker.py")),
+        );
+        scene = await executeScene(dir, "image3d", signal, (stage) =>
+          update(j, { stage }),
+        );
+      } else {
+        const selected =
+          candidate.selectedDirectory === "correction-version"
+            ? path.join(source, "correction-version")
+            : source;
+        scene = checkFiles(selected);
+        for (const name of [
+          "scene.blend",
+          "scene.glb",
+          "scene.json",
+          "generated.py",
+          "execution.log",
+        ])
+          fs.copyFileSync(path.join(selected, name), path.join(dir, name));
+      }
       imageProvenance = {
         ...candidate.provenance,
         adoptedCandidate: original.id,
@@ -462,7 +504,9 @@ async function perform(
         visualAcceptance: "pending",
       };
       summary =
-        "已保存为可编辑的实验性版本；尚未完成的检查仍保留在版本记录中。";
+        candidate.kind === "shape"
+          ? "已保存可编辑的形体候选；上色未完成，原有质检问题仍保留在版本记录中。"
+          : "已保存为可编辑的实验性版本；尚未完成的检查仍保留在版本记录中。";
     } else if (j.type === "surface-refine") {
       const probeDir = path.join(dir, "inference");
       fs.mkdirSync(probeDir, { recursive: true });
@@ -560,15 +604,28 @@ async function perform(
         "已完成选区表面精修；未选贴图像素、透明度和网格保持不变。可在版本记录中撤销。";
     } else if (j.type === "image3d") {
       const input = preparedImage(p.id, payload.preparedImageId);
+      const auxiliaryIds: string[] = (payload.attachmentIds || []).filter(
+        (id: string) => id !== input.attachmentId,
+      );
       const probeDir = path.join(dir, "inference");
       const budget = { remainingMs: 1800_000 };
       update(j, { stage: "分析主体比例、结构与颜色" });
       const analysisStart = performance.now();
-      const analysis = await codex.analyzeImage(p.id, payload.prompt, signal, [
-        attachmentPath(p.id, input.attachmentId),
-        attachmentPath(p.id, input.imageId),
-      ]);
+      const analysis = await codex.analyzeImage(
+        p.id,
+        `${payload.prompt}。前两张为主图及分离主体，其余为同一主体辅助照片；辅助图用于核对结构、补充颜色花纹描述，形体和相机仍以主图为准。不要将不同照片当作原生多视图重建输入。`,
+        AbortSignal.any([signal, AbortSignal.timeout(1800_000)]),
+        [
+          attachmentPath(p.id, input.attachmentId),
+          attachmentPath(p.id, input.imageId),
+          ...auxiliaryIds.map((id) => attachmentPath(p.id, id)),
+        ],
+      );
       budget.remainingMs -= performance.now() - analysisStart;
+      fs.writeFileSync(
+        path.join(dir, "image-analysis.json"),
+        JSON.stringify(analysis),
+      );
       if (budget.remainingMs <= 0) throw new Error("已达到 30 分钟处理预算");
       update(j, { stage: "校验本地权重" });
       let publishedShape = "";
@@ -608,6 +665,8 @@ async function perform(
                         } as Record<string, string>
                       )[phase] || "准备纹理工作流";
           const values: Partial<Job> = { stage };
+          if (phase.startsWith("fit-review-"))
+            values.stage = "匹配原照相机与生成形体对照图";
           const file = report.shapePreviewFile || "shape-preview.glb";
           if (
             report.shapePreview &&
@@ -686,6 +745,7 @@ async function perform(
         route: "image3d",
         preparedImageId: input.id,
         primaryAttachmentId: input.attachmentId,
+        auxiliaryAttachmentIds: auxiliaryIds,
         scaleEstimated: true,
         longestSideMeters: 1,
         textureViews: 4,
@@ -717,7 +777,8 @@ async function perform(
       const deadline = AbortSignal.timeout(
         Math.max(1, Math.floor(budget.remainingMs)),
       );
-      const quality = await codex.reviewImage(
+      const reviewStart = performance.now();
+      let quality = await codex.reviewImage(
         p.id,
         `用户需求：${payload.prompt}\n主体分析：${analysis.summary}\n相机估计：${JSON.stringify(report.cameraFit)}`,
         AbortSignal.any([signal, deadline]),
@@ -728,8 +789,128 @@ async function perform(
           ),
         ],
       );
+      budget.remainingMs -= performance.now() - reviewStart;
       imageProvenance.quality = quality;
       put("image3d-candidate", { ...candidate, provenance: imageProvenance });
+      if (
+        !quality.acceptable &&
+        quality.textureIssues.length &&
+        !quality.shapeIssues.length &&
+        quality.textureCorrection &&
+        budget.remainingMs > 1000
+      ) {
+        const correction = quality.textureCorrection;
+        const correctionDir = path.join(dir, "texture-correction");
+        const attempt: Record<string, unknown> = {
+          round: 1,
+          correction,
+          accepted: false,
+          beforeQuality: quality,
+        };
+        imageProvenance.textureCorrection = attempt;
+        try {
+          const mask = await correctionMask(correction);
+          fs.mkdirSync(correctionDir, { recursive: true });
+          fs.copyFileSync(
+            path.join(probeDir, "textured.blend"),
+            path.join(correctionDir, "base.blend"),
+          );
+          fs.copyFileSync(
+            attachmentPath(p.id, input.imageId),
+            path.join(correctionDir, "reference.png"),
+          );
+          fs.writeFileSync(path.join(correctionDir, "selection.png"), mask);
+          fs.writeFileSync(
+            path.join(correctionDir, "request.json"),
+            JSON.stringify({ storedCameraIndex: correction.view }),
+          );
+          const corrected = await runImageProbe(
+            correctionDir,
+            [
+              "--prompt",
+              correction.prompt,
+              "--budget",
+              String(Math.floor(budget.remainingMs / 1000)),
+            ],
+            signal,
+            (value) =>
+              update(j, {
+                stage:
+                  value.status === "queued"
+                    ? "等待本机计算资源"
+                    : "局部纹理纠错（1/1）",
+              }),
+            "refine",
+          );
+          budget.remainingMs -= corrected.executionSeconds * 1000;
+          attempt.report = corrected;
+          if (budget.remainingMs <= 0)
+            throw new Error("纠错达到处理预算，保留原上色候选");
+          update(j, { stage: "比较纠错前后的关键特征" });
+          const comparisonStart = performance.now();
+          const after = await codex.reviewImage(
+            p.id,
+            `用户需求：${payload.prompt}。这是唯一一轮局部纹理纠错。第一张为原照，接下来四张为修正后的正/左/右/背面，最后四张为修正前对应视图。只在关键特征没有退化且整体可接受时放行，不再提出下一轮纠错。`,
+            AbortSignal.any([
+              signal,
+              AbortSignal.timeout(Math.max(1, Math.floor(budget.remainingMs))),
+            ]),
+            [
+              attachmentPath(p.id, input.attachmentId),
+              ...[0, 1, 2, 3].map((i) =>
+                path.join(correctionDir, `textured-view-${i}.png`),
+              ),
+              ...[0, 1, 2, 3].map((i) =>
+                path.join(probeDir, `textured-view-${i}.png`),
+              ),
+            ],
+          );
+          budget.remainingMs -= performance.now() - comparisonStart;
+          attempt.afterQuality = after;
+          if (after.acceptable && !after.regressed && budget.remainingMs > 0) {
+            const correctedVersion = path.join(dir, "correction-version");
+            fs.mkdirSync(correctedVersion, { recursive: true });
+            for (const name of ["base.blend", "command.json", "generated.py"])
+              if (fs.existsSync(path.join(dir, name)))
+                fs.copyFileSync(
+                  path.join(dir, name),
+                  path.join(correctedVersion, name),
+                );
+            fs.copyFileSync(
+              path.join(correctionDir, "refined.blend"),
+              path.join(correctedVersion, "subject.blend"),
+            );
+            const nextScene = await executeScene(
+              correctedVersion,
+              "image3d",
+              signal,
+              (stage) => update(j, { stage }),
+              budget,
+            );
+            scene = nextScene;
+            outputDirectory = correctedVersion;
+            quality = after;
+            attempt.accepted = true;
+            imageProvenance.quality = after;
+            Object.assign(candidate, {
+              selectedDirectory: "correction-version",
+            });
+            update(j, {
+              candidateManifest: scene,
+              candidateArtifactId: artifact(
+                path.join(correctedVersion, "scene.glb"),
+                p.id,
+                "局部纠错候选.glb",
+                "model/gltf-binary",
+              ),
+            });
+          }
+        } catch (error) {
+          if (signal.aborted) throw error;
+          attempt.error = (error as Error).message;
+        }
+        put("image3d-candidate", { ...candidate, provenance: imageProvenance });
+      }
       if (!quality.acceptable || report.cameraFit?.silhouetteIoU < 0.5) {
         update(j, {
           status: "partial",
@@ -781,6 +962,35 @@ async function perform(
           scene = await executeScene(dir, "execute", signal, (stage) =>
             update(j, { stage }),
           );
+          if (payload.shapeRefinement) {
+            update(j, { stage: "检查形体修改后的纹理拉伸" });
+            const audit = await runBlender(
+              dir,
+              [
+                "--python",
+                path.join(ROOT, "blender/texture_audit.py"),
+                "--",
+                dir,
+                payload.objectId,
+              ],
+              signal,
+            );
+            fs.appendFileSync(
+              path.join(dir, "execution.log"),
+              audit.stdout + "\n" + audit.stderr,
+            );
+            if (audit.code)
+              throw new Error(
+                (audit.stderr + "\n" + audit.stdout).slice(-3000),
+              );
+            imageProvenance = {
+              ...revision(j.baseRevisionId!).image3d,
+              lastShapeRefinementAudit: JSON.parse(
+                fs.readFileSync(path.join(dir, "texture-audit.json"), "utf8"),
+              ),
+              visualAcceptance: "pending",
+            };
+          }
           break;
         } catch (e) {
           if (signal.aborted || attempt === 2) throw e;
@@ -825,7 +1035,7 @@ async function perform(
     db.transaction(() => {
       for (const [key, name, mime] of files) {
         const f = path.join(out, name);
-        fs.copyFileSync(path.join(dir, name), f);
+        fs.copyFileSync(path.join(outputDirectory || dir, name), f);
         fs.chmodSync(f, 0o400);
         artifacts[key] = artifact(f, p.id, `Ai-FormaDesk-${rid}-${name}`, mime);
       }
@@ -871,6 +1081,62 @@ async function perform(
         addMessage(p.id, "assistant", summary);
     })();
   } catch (e) {
+    // A failed quality gate must not strand a validated gray mesh in a read-only
+    // preview. Adoption is a separate explicit job, with fresh scene validation.
+    if (
+      !signal.aborted &&
+      j.type === "image3d" &&
+      j.candidateArtifactId &&
+      !j.candidateManifest
+    ) {
+      try {
+        const report = JSON.parse(
+          fs.readFileSync(path.join(dir, "inference/run.json"), "utf8"),
+        );
+        const match = /^shape-candidate-([01])\.glb$/.exec(
+          report.shapePreviewFile || "",
+        );
+        if (match) {
+          const geometryFile = `geometry-${match[1]}.blend`;
+          if (fs.statSync(path.join(dir, "inference", geometryFile)).isFile()) {
+            const input = preparedImage(p.id, payload.preparedImageId);
+            put("image3d-candidate", {
+              id: j.id,
+              projectId: p.id,
+              baseRevisionId: j.baseRevisionId,
+              directory: dir,
+              kind: "shape",
+              geometryFile,
+              objectId: payload.objectId,
+              createdAt: now(),
+              provenance: {
+                route: "image3d",
+                preparedImageId: input.id,
+                primaryAttachmentId: input.attachmentId,
+                auxiliaryAttachmentIds: (payload.attachmentIds || []).filter(
+                  (id: string) => id !== input.attachmentId,
+                ),
+                analysis: fs.existsSync(path.join(dir, "image-analysis.json"))
+                  ? JSON.parse(
+                      fs.readFileSync(
+                        path.join(dir, "image-analysis.json"),
+                        "utf8",
+                      ),
+                    )
+                  : undefined,
+                scaleEstimated: true,
+                longestSideMeters: 1,
+                report,
+                missingSteps: ["texture", "visual-quality"],
+              },
+            });
+            j.candidateCanAdopt = true;
+          }
+        }
+      } catch {
+        /* Keep the original error and read-only preview when preparation is incomplete. */
+      }
+    }
     update(j, {
       status: signal.aborted
         ? "cancelled"

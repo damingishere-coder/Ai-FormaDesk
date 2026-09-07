@@ -196,13 +196,11 @@ app.post<{ Params: { id: string; jobId: string } }>(
       .object({ baseRevisionId: z.string().uuid().nullable() })
       .parse(req.body);
     const candidateJobId = z.string().uuid().parse(req.params.jobId);
-    return reply
-      .code(202)
-      .send(
-        enqueue(req.params.id, baseRevisionId, "accept-image3d", {
-          candidateJobId,
-        }),
-      );
+    return reply.code(202).send(
+      enqueue(req.params.id, baseRevisionId, "accept-image3d", {
+        candidateJobId,
+      }),
+    );
   },
 );
 app.post<{ Params: { id: string } }>(
@@ -224,14 +222,13 @@ app.post<{ Params: { id: string } }>(
       })
       .parse(req.body);
     if (b.type === "shape") {
-      return reply
-        .code(202)
-        .send(
-          enqueue(req.params.id, b.baseRevisionId, "generate", {
-            ...b,
-            prompt: `仅调整选中对象的形体：${b.prompt}。保留对象 ID、已有 UV、材质贴图及其他对象；不要重新生成整个主体。修改后说明可能的纹理拉伸。`,
-          }),
-        );
+      return reply.code(202).send(
+        enqueue(req.params.id, b.baseRevisionId, "generate", {
+          ...b,
+          shapeRefinement: true,
+          prompt: `仅调整选中对象的形体：${b.prompt}。保留对象 ID、已有 UV、材质贴图及其他对象；不要重新生成整个主体。修改后说明可能的纹理拉伸。`,
+        }),
+      );
     }
     if (
       !b.camera ||
@@ -343,6 +340,7 @@ app.post<{ Params: { id: string } }>(
           objectId: z.string().uuid().nullable().optional(),
           route: z.enum(["script", "image3d"]).default("script"),
           preparedImageId: z.string().uuid().optional(),
+          attachmentIds: z.array(z.string().uuid()).max(6).default([]),
         }),
       ])
       .parse(req.body);

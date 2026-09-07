@@ -408,6 +408,14 @@ export function App() {
           <span>{busy ? "处理中" : base ? "已保存" : "空白项目"}</span>
         </span>
         <div className="top-actions">
+          {!!snapshot?.revision?.image3d && (
+            <span
+              className="experimental-badge"
+              title="不可见部分属于推测，初始尺度为估算"
+            >
+              图生模型 · 实验性
+            </span>
+          )}
           <button
             className="icon"
             aria-label="撤销"
@@ -547,7 +555,8 @@ export function App() {
             {showCandidate ? "查看原作品" : "查看候选"}
           </button>
           {showCandidate &&
-            candidate.candidateManifest &&
+            (candidate.candidateManifest || candidate.candidateCanAdopt) &&
+            candidate.status === "partial" &&
             !candidate.resultRevisionId && (
               <button
                 disabled={busy || candidate.baseRevisionId !== base}
@@ -566,16 +575,27 @@ export function App() {
         <ImagePreparation
           key={preparation.id}
           image={preparation}
+          generationUnavailable={
+            health?.checking
+              ? "环境检查正在排队或执行，完成后即可生成。"
+              : !health?.ok
+                ? "本机执行环境暂不可用，请查看环境检查。"
+                : !health?.image3d?.shape?.installationReady ||
+                    !health?.image3d?.texture?.installationReady
+                  ? "本地图生引擎尚未安装完整，请查看环境检查。"
+                  : undefined
+          }
           onClose={() => setPreparation(null)}
           onSaved={(image) => {
             setPreparation(image);
             void load(pid);
           }}
-          onGenerate={async (image, text) => {
+          onGenerate={async (image, text, attachmentIds) => {
             if (
               await startJob("generate", {
                 route: "image3d",
                 preparedImageId: image.id,
+                attachmentIds,
                 prompt: text,
                 baseRevisionId: base,
                 objectId: null,

@@ -27,10 +27,12 @@ def emit(event, **values):
     print(json.dumps({'event': event, **values}, ensure_ascii=False), flush=True)
 
 
-def sha256(file):
+def sha256(file, deadline=None):
     h = hashlib.sha256()
     with file.open('rb') as f:
         for chunk in iter(lambda: f.read(8 * 1024 * 1024), b''):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('权重校验已达到处理预算，未开始推理')
             h.update(chunk)
     return h.hexdigest()
 

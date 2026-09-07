@@ -14,14 +14,14 @@ from validate import glb
 BLENDER=Path('/Applications/Blender 4.5 LTS.app/Contents/MacOS/Blender')
 
 
-def verify(runtime, names):
+def verify(runtime, names, deadline=None):
     evidence=[]
     for spec in LOCK['weights']:
         if spec['name'] not in names:continue
         file=runtime/'models'/spec['path']
         if not file.is_file():raise RuntimeError('尚未安装并校验权重：'+spec['name'])
         if file.resolve()!=file:raise RuntimeError('模型权重路径不允许符号链接：'+spec['name'])
-        if file.stat().st_size!=spec['size'] or sha256(file)!=spec['sha256']:
+        if file.stat().st_size!=spec['size'] or sha256(file, deadline)!=spec['sha256']:
             raise RuntimeError('权重校验失败，拒绝推理：'+spec['name'])
         evidence.append(spec)
     return evidence

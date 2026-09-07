@@ -104,6 +104,15 @@ export async function runImageProbe(
       result.stdout + "\n" + result.stderr,
     );
     inspect();
+    if (!fs.existsSync(path.join(dir, "run.json"))) {
+      let failure = result.stderr.trim();
+      try {
+        failure = JSON.parse(failure).error || failure;
+      } catch {
+        /* CLI startup errors may be plain text. */
+      }
+      throw new Error(failure.slice(-2000) || "本地引擎预检失败，未开始推理");
+    }
     const report = JSON.parse(
       fs.readFileSync(path.join(dir, "run.json"), "utf8"),
     );

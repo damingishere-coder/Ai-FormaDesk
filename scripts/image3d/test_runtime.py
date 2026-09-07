@@ -11,6 +11,7 @@ import os
 import signal
 import time
 import ctypes
+import fcntl
 
 from runtime import Runtime, StageFailure
 
@@ -172,6 +173,37 @@ with r.acquired():
                 time.sleep(.05)
         finally:
             if host.poll() is None:host.kill();host.wait(timeout=5)
+
+    def test_blender_resource_wrapper_dies_with_host(self):
+        from metrics import MemorySampler
+        wrapper=Path(__file__).with_name('resource_exec.py').resolve()
+        for queued in [False,True]:
+            with self.subTest(queued=queued):
+                directory=self.root/str(queued);directory.mkdir()
+                lock=(directory/'inference.lock').open('a')
+                if queued:fcntl.flock(lock,fcntl.LOCK_EX)
+                marker=directory/'executed';pidfile=directory/'group'
+                command=[sys.executable,str(wrapper),'--runtime',str(directory),'--',sys.executable,'-c',
+                    f'from pathlib import Path;import time;Path({str(marker)!r}).write_text("started");time.sleep(30)']
+                host=subprocess.Popen([sys.executable,'-c',f'import subprocess,time;from pathlib import Path;p=subprocess.Popen({command!r},start_new_session=True);Path({str(pidfile)!r}).write_text(str(p.pid));time.sleep(30)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                group=None
+                try:
+                    deadline=time.monotonic()+10
+                    while not pidfile.exists() or (not queued and not marker.exists()):
+                        if time.monotonic()>deadline:self.fail('Resource wrapper did not start')
+                        time.sleep(.05)
+                    group=int(pidfile.read_text());host.kill();host.wait(timeout=5)
+                    sampler=MemorySampler();members=(ctypes.c_int*256)();deadline=time.monotonic()+5
+                    while sampler.lib.proc_listpgrppids(group,members,ctypes.sizeof(members))>0:
+                        if time.monotonic()>deadline:self.fail('Resource group outlived host')
+                        time.sleep(.05)
+                    if queued:self.assertFalse(marker.exists(),'Queued orphan executed a command')
+                finally:
+                    if host.poll() is None:host.kill();host.wait(timeout=5)
+                    if group:
+                        try:os.killpg(group,signal.SIGKILL)
+                        except ProcessLookupError:pass
+                    lock.close()
 
 
 if __name__ == '__main__':

@@ -28,8 +28,9 @@ def main():
     runtime,job=args.runtime.resolve(),args.job.resolve()
     job.mkdir(parents=True,exist_ok=True)
     if (job/'run.json').exists():raise ValueError('任务目录已有记录，拒绝覆盖')
+    preflight_started=time.monotonic()
     space(job,0)
-    weights=verify(runtime,{w['name'] for w in LOCK['weights']})
+    weights=verify(runtime,{w['name'] for w in LOCK['weights']},preflight_started+min(1800,max(1,args.budget)))
     sources={}
     for name,spec in LOCK['sources'].items():
         folder=runtime/'sources'/name
@@ -47,6 +48,7 @@ def main():
         'mergedLoraSha256':sha256(ROOT/'native/image3d/comfy_nodes/merged_lora.py'),
         'multiviewAdapterSha256':sha256(Path(__file__).with_name('multiview_stage.py')),
         'workflowAdapterSha256':sha256(Path(__file__).with_name('blender_stage.py'))})
+    r.report['supervisorSha256']=sha256(Path(__file__))
     r.save()
     script=Path(__file__).parent.resolve()
     read=[BLENDER.parents[2],script,runtime/'sources/stablegen',runtime/'blender-python']
@@ -77,6 +79,9 @@ def main():
         r.report.pop('shapeReviewPending',None);r.save()
         return result
     try:
+        preflight=time.monotonic()-preflight_started
+        r.report['preflightSeconds']=preflight;r.budget-=preflight;r.save()
+        if r.budget<=0:raise RuntimeError('权重与运行环境校验已达到处理预算，未开始推理')
         with r.acquired():
             if args.shape:
                 shutil.copyfile(args.shape,job/'shape.glb')
@@ -116,10 +121,12 @@ def main():
             r.report['texturedCandidate']=glb(job/'textured.glb',require_texture=True)
             r.report['coverage']=json.loads((job/'coverage-3.json').read_text())
             r.report.update(status='backend-passed',completeBackendPipeline=not bool(args.shape))
-            r.report['executionSeconds']=r.budget-r.remaining()
+            r.report['executionSeconds']=preflight+r.budget-r.remaining()
             r.save()
     except Exception as error:
         r.report['error']=str(error)
+        r.report['executionSeconds']=preflight+(r.budget-r.remaining() if r.started is not None else 0)
+        if r.report.get('status')=='queued':r.report['status']='failed'
         if r.report.get('shapePreview') and r.report.get('status')!='cancelled':r.report['status']='partial'
         r.save();raise
     print(json.dumps(r.report,ensure_ascii=False,indent=2))

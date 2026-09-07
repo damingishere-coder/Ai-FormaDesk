@@ -91,7 +91,7 @@ class Runtime:
             previous = {s: signal.signal(s, self.cancel) for s in (signal.SIGTERM, signal.SIGINT)}
             try:
                 while True:
-                    if self.cancelled or os.getppid() != self.owner_pid:
+                    if self.cancelled or self.owner_pid <= 1 or os.getppid() != self.owner_pid:
                         self.cancelled = True
                         raise StageFailure('任务已取消')
                     try:
@@ -116,7 +116,7 @@ class Runtime:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
     def remaining(self):
-        if os.getppid() != self.owner_pid:
+        if self.owner_pid <= 1 or os.getppid() != self.owner_pid:
             self.cancelled = True
         if self.started is None:
             raise StageFailure('必须先获取推理资源锁')

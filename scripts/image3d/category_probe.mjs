@@ -3,8 +3,13 @@ import { request } from "playwright";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
-const [directory, sampleDirectory, port = "8891", filter = "all"] =
-  process.argv.slice(2);
+const [
+  directory,
+  sampleDirectory,
+  port = "8891",
+  filter = "all",
+  privatePhoto,
+] = process.argv.slice(2);
 if (!directory || !sampleDirectory)
   throw new Error("Need isolated evidence and sample directory");
 await fs.mkdir(directory, { recursive: true });
@@ -22,6 +27,16 @@ const lock = JSON.parse(
 const samples = lock.samples.filter(
   (s) => filter === "all" || s.file === filter,
 );
+if (privatePhoto && filter === "all") {
+  const bytes = await fs.readFile(privatePhoto);
+  samples.push({
+    file: "private-cat-reference.png",
+    category: "animal",
+    privatePath: privatePhoto,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    inputLimitations: "用户提供的单张猫咪照片；私人素材仅保存在本机证据目录",
+  });
+}
 const save = () =>
   fs.writeFile(
     path.join(directory, "category-report.json"),
@@ -73,7 +88,9 @@ try {
     results.push(result);
     await save();
     try {
-      const bytes = await fs.readFile(path.join(sampleDirectory, sample.file));
+      const bytes = await fs.readFile(
+        sample.privatePath || path.join(sampleDirectory, sample.file),
+      );
       if (createHash("sha256").update(bytes).digest("hex") !== sample.sha256)
         throw new Error("Sample checksum mismatch");
       const project = await api("/api/projects", {

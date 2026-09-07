@@ -158,7 +158,8 @@ export type Job = {
   projectId: string;
   baseRevisionId: string | null;
   type: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "partial";
+  status:
+    "queued" | "running" | "succeeded" | "failed" | "cancelled" | "partial";
   stage: string;
   error: string | null;
   resultRevisionId: string | null;
@@ -169,6 +170,7 @@ export type Job = {
   preparedImageId?: string;
   candidateArtifactId?: string;
   candidateManifest?: Scene;
+  candidateCanAdopt?: boolean;
   startedAt?: string;
   events?: { stage: string; at: string }[];
 };

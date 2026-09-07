@@ -113,7 +113,11 @@ async function perform() {
 export function assertExecution() {
   if (!environment.blender.ok || !environment.sandbox.ok)
     throw Object.assign(
-      new Error("Blender 或沙箱检查未通过，执行已停用。请打开环境检查。"),
+      new Error(
+        environment.checking
+          ? "环境检查仍在等待本机计算资源或执行中，请稍候。"
+          : "Blender 或沙箱检查未通过，执行已停用。请打开环境检查。",
+      ),
       { statusCode: 503 },
     );
 }

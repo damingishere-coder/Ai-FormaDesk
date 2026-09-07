@@ -17,7 +17,12 @@ from mathutils.bvhtree import BVHTree
 
 def target(job):
     request=json.loads((job/'request.json').read_text())
-    obj=next((o for o in bpy.context.scene.objects if o.get('forma_id')==request['objectId']),None)
+    if 'storedCameraIndex' in request:
+        objects=[o for o in bpy.context.scene.objects if o.type=='MESH' and not o.hide_render]
+        if len(objects)!=1:raise ValueError('自动局部纠错需要单一主体网格，已保留原候选')
+        obj=objects[0]
+    else:
+        obj=next((o for o in bpy.context.scene.objects if o.get('forma_id')==request['objectId']),None)
     if obj is None or obj.type!='MESH':raise ValueError('请选择需要精修的网格对象')
     if any(m.show_render for m in obj.modifiers):raise ValueError('局部表面精修需要已应用修改器的网格')
     if len(obj.data.materials)!=1:raise ValueError('首版局部精修需要单一图片材质')
@@ -43,6 +48,13 @@ def target(job):
 
 
 def camera(job,request):
+    if 'storedCameraIndex' in request:
+        index=request['storedCameraIndex']
+        cameras=sorted([o for o in bpy.context.scene.objects if o.type=='CAMERA'],key=lambda o:o.name)
+        if type(index)!=int or not 0<=index<4 or len(cameras)!=4:raise ValueError('自动纠错的原始相机无效')
+        bpy.context.scene.camera=cameras[index]
+        bpy.context.view_layer.update()
+        return cameras[index]
     scene=bpy.context.scene;c=request['camera']
     cv=lambda v:Vector((v[0],-v[2],v[1]))
     pos=cv(c['position']);back=(pos-cv(c['target'])).normalized()
@@ -70,7 +82,7 @@ def prepare(job):
     if atlas.format!='PNG':raise ValueError('局部精修仅支持无损 PNG 基础贴图')
     cam=camera(job,request);scene=bpy.context.scene
     selection=Image.open(job/'selection.png').convert('L')
-    aspect=request['camera']['aspect']
+    aspect=1 if 'storedCameraIndex' in request else request['camera']['aspect']
     dimensions=(512,round(512/aspect)) if aspect>=1 else (round(512*aspect),512)
     square=Image.new('L',(512,512));square.paste(selection.resize(dimensions,Image.Resampling.NEAREST),((512-dimensions[0])//2,(512-dimensions[1])//2))
     if not square.getbbox():raise ValueError('请先涂选需要修改的区域')
@@ -91,7 +103,7 @@ def prepare(job):
     remap.inputs['To Min'].default_value=1;remap.inputs['To Max'].default_value=0;remap.use_clamp=True
     out=nodes.new('CompositorNodeComposite');scene.node_tree.links.new(layer.outputs['Depth'],remap.inputs['Value']);scene.node_tree.links.new(remap.outputs['Value'],out.inputs['Image'])
     scene.render.filepath=str(job/'depth.png');bpy.ops.render.render(write_still=True)
-    (job/'prepare-report.json').write_text(json.dumps({'objectId':obj['forma_id'],'atlas':list(image.size),'maskPixels':int((np.array(square)>0).sum())}))
+    (job/'prepare-report.json').write_text(json.dumps({'objectId':obj.get('forma_id'),'objectName':obj.name,'atlas':list(image.size),'maskPixels':int((np.array(square)>0).sum())}))
 
 
 def apply(job):
@@ -135,11 +147,14 @@ def apply(job):
         a,b,c=coords;v0=b-a;v1=c-a;det=v0[0]*v1[1]-v1[0]*v0[1]
         if abs(det)<1e-9:continue
         delta=points-a;u=(delta[:,0]*v1[1]-delta[:,1]*v1[0])/det;v=(v0[0]*delta[:,1]-v0[1]*delta[:,0])/det
-        inside=(u>1e-7)&(v>1e-7)&(u+v<1-1e-7)
+        inside=(u>=-1e-7)&(v>=-1e-7)&(u+v<=1+1e-7)
         if not inside.any():continue
         x=xx.ravel()[inside];y=yy.ravel()[inside];u=u[inside];v=v[inside]
-        if occupied[y,x].any():raise ValueError('检测到重叠 UV，局部修改可能影响未选表面，已保留原版本')
-        occupied[y,x]=1
+        interior=(u>1e-7)&(v>1e-7)&(u+v<1-1e-7)
+        # Adjacent triangles legitimately share an edge, including texel centers
+        # on a quad's diagonal. Reject area overlap, without leaving seam pixels.
+        if (occupied[y,x]&interior).any():raise ValueError('检测到重叠 UV，局部修改可能影响未选表面，已保留原版本')
+        occupied[y[interior],x[interior]]=1
         xyz=positions[list(triangle.vertices)];world=xyz[0]+u[:,None]*(xyz[1]-xyz[0])+v[:,None]*(xyz[2]-xyz[0])
         projected=np.c_[world,np.ones(len(world))]@projection.T
         screen=projected[:,:2]/np.maximum(projected[:,3:],1e-12);pixels=np.floor((screen+1)*256).astype(int)
@@ -171,16 +186,29 @@ def apply(job):
     obj.data.materials[0]=private
     bpy.context.preferences.filepaths.save_version=0
     bpy.ops.wm.save_as_mainfile(filepath=str(job/'refined.blend'),check_existing=False)
-    report={'objectId':obj['forma_id'],'selectedAtlasPixels':int(changed_mask.sum()),'changedPixels':int(np.any(result!=original,axis=2).sum()),
+    report={'objectId':obj.get('forma_id'),'objectName':obj.name,'selectedAtlasPixels':int(changed_mask.sum()),'changedPixels':int(np.any(result!=original,axis=2).sum()),
         'unselectedPixelsUnchanged':True,'alphaUnchanged':True,'geometryOperation':'none','originalAtlasSha256':hashlib.sha256((job/'original-atlas.png').read_bytes()).hexdigest()}
     (job/'refine-report.json').write_text(json.dumps(report,indent=2))
     print('FORMA_REFINE_OK',json.dumps(report))
 
 
+def review(job):
+    bpy.ops.wm.open_mainfile(filepath=str(job/'refined.blend'),load_ui=False,use_scripts=False)
+    scene=bpy.context.scene
+    cameras=sorted([o for o in scene.objects if o.type=='CAMERA'],key=lambda o:o.name)
+    if len(cameras)!=4:raise ValueError('修正后的四视角检查相机缺失')
+    scene.render.engine='CYCLES';scene.cycles.device='CPU';scene.cycles.samples=8
+    scene.render.resolution_x=scene.render.resolution_y=512;scene.render.resolution_percentage=100
+    scene.use_nodes=False;scene.render.image_settings.file_format='PNG'
+    for index,cam in enumerate(cameras):
+        scene.camera=cam;scene.render.filepath=str(job/f'textured-view-{index}.png')
+        bpy.ops.render.render(write_still=True)
+
+
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--runtime',type=Path,required=True);parser.add_argument('--job',type=Path,required=True);parser.add_argument('--mode',choices=['prepare','apply'],required=True)
+    parser=argparse.ArgumentParser();parser.add_argument('--runtime',type=Path,required=True);parser.add_argument('--job',type=Path,required=True);parser.add_argument('--mode',choices=['prepare','apply','review'],required=True)
     args=parser.parse_args(sys.argv[sys.argv.index('--')+1:]);sys.path.append(str(args.runtime/'blender-python'))
-    (prepare if args.mode=='prepare' else apply)(args.job)
+    {'prepare':prepare,'apply':apply,'review':review}[args.mode](args.job)
 
 
 if __name__=='__main__':main()
