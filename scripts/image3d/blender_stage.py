@@ -155,14 +155,14 @@ def prepare_shape(job, glb):
             'cameraMatched':False,'note':'阶段 A 固定相机；尚未实现照片视角匹配'}
 
 
-def build_workflow(runtime, job, prompt):
+def build_workflow(runtime, job, prompt, lora_mode='merged'):
     context = load_addon(runtime)
     from stablegen.workflows import WorkflowManager
     # Plain settings avoid model dropdown callbacks and UI/network timers.
     scene = SimpleNamespace(
         comfyui_prompt=prompt, comfyui_negative_prompt='text, watermark, blurry, extra objects',
         use_separate_texture_prompt=False, use_camera_prompts=False,
-        seed=42, steps=8, cfg=1.0, sampler='euler', scheduler='sgm_uniform', clip_skip=1,
+        seed=42, steps=8, cfg=1.0, sampler='euler', scheduler='sgm_uniform', clip_skip=2,
         model_name='sd_xl_base_1.0.safetensors', model_architecture='sdxl',
         generation_method='sequential', sequential_ipadapter=False,
         use_ipadapter=True, ipadapter_strength=.8, ipadapter_start=0., ipadapter_end=1.,
@@ -237,9 +237,15 @@ def build_workflow(runtime, job, prompt):
             if isinstance(value,list) and len(value)==2 and isinstance(value[0],str):
                 visit(value[0])
     visit(out)
+    if (job/'context.png').is_file():
+        retained['forma-existing']={'class_type':'LoadImage','inputs':{'image':'context.png'}}
+        retained['forma-conditioning']['inputs']['existing']=['forma-existing',0]
+    if lora_mode=='merged':
+        for node in retained.values():
+            if node['class_type']=='LoraLoaderBypassModelOnly':node['class_type']='FormaMergedLoRA'
     (job/'workflow.json').write_text(json.dumps({'prompt':retained,'outputNode':out},indent=2))
     return {'nodes':len(retained),'engine':'StableGen.WorkflowManager','steps':8,'resolution':512,
-            'loraApplication':'ComfyUI bypass model-only (experimental)'}
+            'loraApplication':lora_mode}
 
 
 def projection_bake(runtime, job, blend, texture, atlas):
@@ -310,6 +316,7 @@ def main():
     p.add_argument('--texture', type=Path)
     p.add_argument('--glb', type=Path)
     p.add_argument('--prompt', default='a blue ceramic vase, realistic surface, single object')
+    p.add_argument('--lora-mode', choices=['bypass','merged'], default='merged')
     p.add_argument('--atlas', type=int, choices=[256, 512, 1024, 2048], default=512)
     args = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
     args.job.mkdir(parents=True, exist_ok=True)
@@ -318,7 +325,7 @@ def main():
         if not args.glb: p.error('--prepare 需要 --glb')
         result = prepare_shape(args.job.resolve(),args.glb.resolve())
     elif args.mode == 'workflow':
-        result = build_workflow(args.runtime.resolve(),args.job.resolve(),args.prompt)
+        result = build_workflow(args.runtime.resolve(),args.job.resolve(),args.prompt,args.lora_mode)
     else:
         if not args.blend or not args.texture: p.error('投射需要 --blend 和 --texture')
         result = projection_bake(args.runtime.resolve(), args.job.resolve(), args.blend.resolve(), args.texture.resolve(), args.atlas)

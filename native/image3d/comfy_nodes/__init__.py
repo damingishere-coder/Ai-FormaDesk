@@ -10,6 +10,7 @@ import torch
 import comfy.clip_vision
 import comfy.model_management as memory
 import comfy.sd
+from .merged_lora import FormaMergedLoRA
 
 
 def release_models():
@@ -37,16 +38,18 @@ class FormaConditioning:
             'positive':('STRING',{'multiline':True}),
             'negative':('STRING',{'multiline':True}),
             'image':('IMAGE',),
-        }}
+        },'optional':{'existing':('IMAGE',)}}
     RETURN_TYPES=('CONDITIONING','CONDITIONING','EMBEDS','EMBEDS','FORMA_READY')
     FUNCTION='encode'
     CATEGORY='FormaDesk/local'
 
-    def encode(self,checkpoint,clip_vision,ipadapter,positive,negative,image):
+    def encode(self,checkpoint,clip_vision,ipadapter,positive,negative,image,existing=None):
         path=folder_paths.get_full_path_or_raise('checkpoints',checkpoint)
         _,clip,_,_=comfy.sd.load_checkpoint_guess_config(
             path,output_model=False,output_clip=True,output_vae=False,output_clipvision=False)
-        clip.clip_layer(-1)
+        # SDXL's two encoders are trained with penultimate hidden states (-2).
+        # Keep the checkpoint's native default; overriding with -1 corrupts the
+        # conditioning distribution, particularly with distilled 8-step models.
         conditions=[]
         for text in [positive,negative]:
             cond,pooled=clip.encode_from_tokens(clip.tokenize(text),return_pooled=True)
@@ -58,6 +61,11 @@ class FormaConditioning:
         vision=comfy.clip_vision.load(folder_paths.get_full_path_or_raise('clip_vision',clip_vision))
         adapter=nodes.NODE_CLASS_MAPPINGS['IPAdapterModelLoader']().load_ipadapter_model(ipadapter)[0]
         pos,neg=nodes.NODE_CLASS_MAPPINGS['IPAdapterEncoder']().encode(adapter,image,1.0,clip_vision=vision)
+        if existing is not None:
+            previous,previous_neg=nodes.NODE_CLASS_MAPPINGS['IPAdapterEncoder']().encode(adapter,existing,1.0,clip_vision=vision)
+            pos=pos*.8+previous*.2
+            neg=neg*.8+previous_neg*.2
+            del previous,previous_neg
         embeddings=(pos.detach().cpu(),neg.detach().cpu())
         del vision,adapter,pos,neg
         release_models()
@@ -136,5 +144,6 @@ class FormaDepthModel:
 
 
 NODE_CLASS_MAPPINGS={'FormaConditioning':FormaConditioning,
+                     'FormaMergedLoRA':FormaMergedLoRA,
                      'FormaDiffusionModel':FormaDiffusionModel,'FormaDecodeVAE':FormaDecodeVAE,
                      'FormaIPModel':FormaIPModel,'FormaDepthModel':FormaDepthModel}

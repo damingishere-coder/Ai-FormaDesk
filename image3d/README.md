@@ -1,6 +1,6 @@
-# 本地图生建模：阶段 A 验证工具
+# 本地图生建模与局部精修
 
-这里包含独立兼容性验证工具及正在接入的工作台图生候选路线；正式多视角作品版本与局部精修仍未完成。
+这里包含本地运行环境、独立验证工具及工作台图生建模路线。四视角纹理、候选保存及局部表面精修已接入；自动纠错和跨类别视觉验收仍在进行。
 只有真实的形体生成、AI 纹理推理、StableGen 投射烘焙及网页查看全部通过，
 才能进入完整工作台改造。单个探针通过不会把整条路线标记成功。
 
@@ -9,7 +9,7 @@
 - `runtime.lock.json`：Hunyuan3D-Swift、StableGen、ComfyUI、IPAdapter 节点源码提交；全部模型的仓库版本、字节数和 SHA-256。
 - `swift-dependencies.lock.json`：MLX Swift、Swift Numerics 和 MLX/MLX-C 子模块提交。
 - 形体使用 shape-small、30 步、octree 256、种子 42。
-- 纹理使用 SDXL Base 1.0、FP16 Depth ControlNet、IPAdapter Plus ViT-H、Lightning 8 步。仅单视角 512；探针图集默认 512，可用 `--atlas 2048` 验证上限。
+- 纹理使用 SDXL Base 1.0、FP16 Depth ControlNet、IPAdapter Plus ViT-H、Lightning 8 步。逐视角 512，最终图集 2048。单视角诊断探针的图集默认 512，可用 `--atlas 2048` 验证上限。
 - `comfy-backend.requirements.txt` 记录依赖筛选来源；实际安装使用 `comfy-python.requirements.txt`，固定 75 个包及 SHA-256。`blender-python.requirements.txt` 单独固定 5 个 Blender 补充依赖。
 
 模型权重共约 15.9 GiB，另需依赖、编译缓存及至少 10 GiB 工作余量。
@@ -60,8 +60,7 @@ python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probe
 常驻内存数字不等于完整 GPU 内存或整机内存峰值。
 新运行另外通过 macOS `proc_pid_rusage` 采样专属进程组内存占用；这仍不是单独的 GPU 内存计量。
 `completePipeline` 在子探针中始终为 false；后台链路通过后，网页和视觉检查仍需单独记录。
-当前形体检查使用固定相机，尚未实现照片相机匹配和 GPT 纠错。
-单视角烘焙没有覆盖的背面不能视为完成上色。
+四视角路线使用有限的轮廓搜索估计照片相机，保留正面原照，依次生成左右侧与背面；估计相机不等于真实相机参数。CLI 不默认运行 GPT，工作台通过 `--quality-handshake` 在上色前检查形体，最多换种子重生成一次；独立保留两个候选。
 
 ## 运行边界
 
@@ -106,7 +105,7 @@ python3 scripts/image3d/cancel_probe.py --runtime data/image3d-runtime --job dat
 
 ## M2 顺序加载适配
 
-`native/image3d/comfy_nodes` 仅供专属 ComfyUI 实例使用，依次执行参考编码、UNet/IPAdapter/深度推理和 CPU VAE 解码。运行采用分块注意力，MPS high/low watermark 为 1.0/0.65。固定 Lightning 权重仅包含 UNet LoRA；使用固定 ComfyUI 的实验性 model-only bypass 节点，因此升级上游前必须重跑完整验证。
+`native/image3d/comfy_nodes` 仅供专属 ComfyUI 实例使用，依次执行参考编码、UNet/IPAdapter/深度推理和 CPU VAE 解码。运行采用分块注意力，MPS high/low watermark 为 1.0/0.65。固定 Lightning 权重仅包含 UNet LoRA；默认逐参数合并到当前任务独占的 UNet，避免完整备份权重；文本编码器使用 SDXL 原生倒数第二层。旧 bypass 节点仅保留作诊断对照，升级上游前必须重跑完整验证。
 
 浏览器验证后执行 `python3 scripts/image3d/acceptance.py --job data/probes/full-01`，它核对完整阶段及当前 GLB 与浏览器记录的 SHA-256，产出技术兼容性记录；它不会把类别或照片还原质量自动判为通过。
 
@@ -114,6 +113,22 @@ python3 scripts/image3d/cancel_probe.py --runtime data/image3d-runtime --job dat
 
 可用 `FORMA_IMAGE3D_RUNTIME` 指定已安装的独立运行目录。环境检查分别展示形体、纹理与磁盘余量；运行前还会校验完整权重。上传或粘贴图片后点击“准备主体”，在蒙版画布确认主体后生成候选。旧方案缺少 `route` 时仍使用脚本路线。
 
-图片准备返回不可变处理图 ID；修补蒙版和裁切产生新记录。推理候选与当前作品版本分离，目前单视角结果返回 `partial`，多视角与照片一致性未通过前不自动创建正式版本。可旋转候选，刷新后可重新打开；失败与取消保留原作品。
+图片准备返回不可变处理图 ID；修补蒙版和裁切产生新记录。推理候选与当前作品版本分离，形体可先预览；四视角上色后再次对照照片。未通过检查时返回 `partial`，保留原版本。通过文件验证的上色候选可由用户明确选择“保存为可编辑版本”，记录未通过的质量检查，不把采用候选当成类别验收。成功版本仍标记实验性。
 
 真实集成检查入口：`scripts/image3d/workbench_probe.ts`、`resource_probe.ts` 和 `app_probe.mjs`；都需要单独的数据/证据目录。完整实测结果及未完成项见 `LOCAL-REPORT.md`。
+
+## 局部表面精修
+
+选中已保存的网格后，点击“精修表面”，在冻结的当前视角框选或涂选区域并输入要求。专属 ComfyUI 生成一张 512 纹理候选，随后按可见性把选区颜色写入已有 UV 图集。原 PNG 选区外像素和透明度保持不变；共享材质及图片会隔离，原网格、UV、ID 和对象变换保留。该步骤不重建形体。
+
+首版支持单个无修改器网格、一个含单张 PNG 基础颜色图的材质、无重叠的标准 UV；不符合条件时明确报错并保留原版本。精修分辨率不超过 2048，修改效果仍需视觉检查。“调整形体”使用现有受限 Blender 脚本路线，并保留历史版本；不会扩大脚本权限。
+
+实际检查入口：`refine_probe.py` 验证局部投射与几何不变（合成颜色，不代表 AI 推理）；`refine_browser_probe.mjs` 运行真实网页框选、本机推理、保存、导出和撤销/重做。`category_probe.mjs` 对固定公开样本运行真实 API 流程，结果始终不自动标记用户视觉通过。
+
+四视角独立技术探针：
+
+```sh
+python3 scripts/image3d/pipeline.py --runtime data/image3d-runtime --job data/probes/multiview-01 --image /absolute/path/transparent.png --prompt "A wooden chair with a taupe fabric cushion"
+```
+
+`--shape /absolute/path/shape.glb` 只用于复用几何的纹理诊断，不作为完整图生技术验收。独立探针不要使用需要工作台响应的 `--quality-handshake`。

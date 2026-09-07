@@ -40,6 +40,7 @@ def main():
                    help='Stage A controlled memory limit; default remains conservative')
     p.add_argument('--atlas',type=int,choices=[256,512,1024,2048],default=512)
     p.add_argument('--prompt',default='a blue ceramic vase, realistic surface, single object')
+    p.add_argument('--lora-mode',choices=['bypass','merged'],default='merged')
     args=p.parse_args()
     if not 1<=len(args.prompt)<=2000:p.error('纹理描述需要 1 至 2000 个字符')
     runtime,job=args.runtime.resolve(),args.job.resolve()
@@ -113,15 +114,17 @@ def main():
                 r.report['shapePreview']=glb(job/'shape-preview.glb')
                 r.save()
             if args.case in ['workflow','environment','texture','full']:
-                stage('workflow',[*blender,'--mode','workflow','--prompt',args.prompt],read)
+                stage('workflow',[*blender,'--mode','workflow','--prompt',args.prompt,'--lora-mode',args.lora_mode],read)
             if args.case in ['environment','texture','full']:
                 python=runtime/'comfy-venv/bin/python'
                 texture_script=Path(__file__).with_name('texture.py').resolve()
                 r.report['textureRuntime']={
                     'adapterSha256':sha256(ROOT/'native/image3d/comfy_nodes/__init__.py'),
+                    'mergedLoraSha256':sha256(ROOT/'native/image3d/comfy_nodes/merged_lora.py'),
                     'runnerSha256':sha256(texture_script),'workflowSha256':sha256(job/'workflow.json'),
                     'loading':'sequential-components-stream-depth','depthDevice':'mps','diffusionDevice':'mps',
-                    'loraApplication':'bypass-model-only-experimental','attention':'split',
+                    'loraApplication':args.lora_mode,'attention':'split',
+                    'textEncoderLayer':'SDXL checkpoint default (penultimate)',
                     'mpsHighWatermarkRatio':1.0,'mpsLowWatermarkRatio':.65}
                 r.save()
                 stage('texture',[python,texture_script,'--runtime',runtime,'--job',job,

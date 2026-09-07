@@ -66,6 +66,7 @@ def main():
     if not args.check_only:
         for name in ['reference.png','depth.png']:
             shutil.copyfile(job/name,base/'input'/name)
+        if (job/'context.png').is_file():shutil.copyfile(job/'context.png',base/'input/context.png')
     # Explicit paths; no first-use model downloads, no shared ComfyUI installation.
     config=job/'extra-model-paths.yaml'
     config.write_text('formadesk:\n  base_path: '+json.dumps(str(runtime/'models/comfy'))+'\n'+
@@ -73,7 +74,7 @@ def main():
     workflow=json.loads((job/'workflow.json').read_text())
     allowed={'CheckpointLoaderSimple','CLIPTextEncode','CLIPSetLastLayer','LoraLoader','LoraLoaderBypassModelOnly',
              'FormaConditioning','FormaDiffusionModel','FormaDecodeVAE','IPAdapterModelLoader','IPAdapterEmbeds',
-             'FormaIPModel','FormaDepthModel',
+             'FormaIPModel','FormaDepthModel','FormaMergedLoRA',
              'EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoadImage',
              'IPAdapterUnifiedLoader','IPAdapterAdvanced','IPAdapter','ControlNetLoader','ControlNetApplyAdvanced'}
     for node in workflow['prompt'].values():

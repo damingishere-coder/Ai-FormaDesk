@@ -100,7 +100,9 @@
       "atlas": 2048,
       "cfg": 1.0,
       "sampler": "euler",
-      "scheduler": "sgm_uniform"
+      "scheduler": "sgm_uniform",
+      "loraApplication": "merged-parameter-wise",
+      "textEncoderLayer": "SDXL default penultimate"
     },
     "budgetSeconds": 1800,
     "correctionRounds": 2

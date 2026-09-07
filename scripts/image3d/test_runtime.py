@@ -146,6 +146,33 @@ with r.acquired():
         finally:
             timer.cancel()
 
+    def test_host_crash_cancels_surviving_supervisor(self):
+        # The app can die while its Python supervisor is still alive. That
+        # supervisor must stop inference and release the global lease itself.
+        module=Path(__file__).parent.resolve()
+        worker=f'''import sys
+from pathlib import Path
+sys.path.insert(0,{str(module)!r})
+from runtime import Runtime
+r=Runtime({str(self.root/'owner-runtime')!r},{str(self.root/'owner-job')!r},30)
+with r.acquired():
+ r.stage('owner',[sys.executable,'-c','import time;time.sleep(30)'],[Path(sys.base_prefix)])
+'''
+        host=subprocess.Popen([sys.executable,'-c',f'import subprocess,sys,time;subprocess.Popen([sys.executable,"-c",{worker!r}]);time.sleep(30)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        report=self.root/'owner-job/run.json'
+        try:
+            deadline=time.monotonic()+10
+            while not report.exists() or not json.loads(report.read_text()).get('stages'):
+                if time.monotonic()>deadline:self.fail('Owned inference did not start')
+                time.sleep(.05)
+            host.kill();host.wait(timeout=5)
+            deadline=time.monotonic()+5
+            while json.loads(report.read_text()).get('status')!='cancelled':
+                if time.monotonic()>deadline:self.fail('Host exit did not cancel supervisor')
+                time.sleep(.05)
+        finally:
+            if host.poll() is None:host.kill();host.wait(timeout=5)
+
 
 if __name__ == '__main__':
     unittest.main()

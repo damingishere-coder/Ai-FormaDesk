@@ -76,6 +76,7 @@ class Runtime:
         self.cancelled = False
         self.report = {'status': 'queued', 'stages': [], 'completePipeline': False}
         self.child = None
+        self.owner_pid = os.getppid()
 
     def save(self):
         atomic_json(self.job / 'run.json', self.report)
@@ -90,7 +91,8 @@ class Runtime:
             previous = {s: signal.signal(s, self.cancel) for s in (signal.SIGTERM, signal.SIGINT)}
             try:
                 while True:
-                    if self.cancelled:
+                    if self.cancelled or os.getppid() != self.owner_pid:
+                        self.cancelled = True
                         raise StageFailure('任务已取消')
                     try:
                         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -114,6 +116,8 @@ class Runtime:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
     def remaining(self):
+        if os.getppid() != self.owner_pid:
+            self.cancelled = True
         if self.started is None:
             raise StageFailure('必须先获取推理资源锁')
         return self.budget - (time.monotonic() - self.started)

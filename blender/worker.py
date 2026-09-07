@@ -100,6 +100,10 @@ if mode=='execute':
     with open(file('generated.py'),encoding='utf8') as f:code=compile(f.read(),'generated.py','exec')
     exec(code,{'bpy':bpy,'__name__':'__main__'})
     bpy.ops.wm.save_as_mainfile(filepath=file('raw.blend'),check_existing=False)
+elif mode=='surface-refine':
+    open_scene('subject.blend')
+    bpy.context.preferences.filepaths.save_version=0
+    bpy.ops.wm.save_as_mainfile(filepath=file('raw.blend'),check_existing=False)
 elif mode=='image3d':
     if os.path.exists(file('base.blend')):open_scene('base.blend')
     else:
@@ -182,6 +186,12 @@ elif mode=='validate':
         if total>150000:
             for obj in objects:
                 modifier=obj.modifiers.new('网页预览简化','DECIMATE');modifier.ratio=145000/total
+        bpy.context.view_layer.update();deps=bpy.context.evaluated_depsgraph_get();preview_total=0
+        for obj in objects:
+            evaluated=obj.evaluated_get(deps);mesh=evaluated.to_mesh()
+            try:mesh.calc_loop_triangles();preview_total+=len(mesh.loop_triangles)
+            finally:evaluated.to_mesh_clear()
+        if preview_total>150000:raise ValueError('图生主体简化后仍超过 15 万三角面，拒绝更新网页版本')
     # Let Blender's glTF exporter traverse supported image, factor and normal
     # chains. Pruning non-image links here also destroys valid texture factors.
     # Export hidden objects too; visibility is carried by the authoritative manifest.
