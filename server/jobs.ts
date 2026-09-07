@@ -1,3 +1,5 @@
+import { ownedVideo, renderVideo } from "./videos";
+import { estimateJob, stageIndex } from "../src/progress";
 import fs from "node:fs";
 import path from "node:path";
 import { EventEmitter } from "node:events";
@@ -62,8 +64,23 @@ export function artifactPath(id: string) {
 }
 function update(j: Job, values: Partial<Job>) {
   Object.assign(j, values, { updatedAt: now() });
-  if (values.stage)
-    j.events = [...(j.events || []), { stage: values.stage, at: now() }];
+  if (values.stage) {
+    const previous = j.events?.at(-1);
+    if (previous && !previous.endedAt) previous.endedAt = now();
+    if (!["failed", "cancelled"].includes(j.status))
+      j.stageIndex = stageIndex(values.stage);
+    j.events = [
+      ...(j.events || []),
+      {
+        stage: values.stage,
+        at: now(),
+        index: j.stageIndex,
+        attempt: j.attempt,
+        error: values.error || undefined,
+      },
+    ];
+    if (j.type === "generate") j.estimate = estimateJob(j, list<Job>("job"));
+  }
   put("job", j);
   jobEvents.emit(j.id, j);
 }
@@ -170,6 +187,10 @@ export function enqueue(
     type,
     status: "queued",
     stage: "排队等待",
+    stageIndex: 0,
+    title: payload.proposalId
+      ? get<Proposal>("proposal", payload.proposalId)?.title
+      : payload.prompt?.slice(0, 100),
     error: null,
     resultRevisionId: null,
     createdAt: now(),
@@ -282,6 +303,21 @@ async function perform(
       });
       return;
     }
+    if (j.type === "video") {
+      update(j, { stage: "Blender 正在渲染视频" });
+      const v = await renderVideo(
+        ownedVideo(p.id, payload.videoId),
+        signal,
+        (progress) => update(j, { progress }),
+      );
+      update(j, {
+        status: "succeeded",
+        stage: "视频已完成",
+        message: "视频已保存，可在导出面板下载",
+        renderArtifactId: v.artifactId,
+      });
+      return;
+    }
     const root = path.join(DATA, "jobs", j.id);
     fs.mkdirSync(root, { recursive: true });
     dir = path.join(root, "attempt-0");
@@ -349,7 +385,10 @@ async function perform(
       let context = `用户指令：${payload.prompt}\n当前版本：${j.baseRevisionId || "空白场景"}\n选中对象 ID：${payload.objectId || "无"}\n参考图片（按顺序）：${JSON.stringify(payload.attachmentIds || [])}\n最新场景：${JSON.stringify(j.baseRevisionId ? revision(j.baseRevisionId).scene : { objects: [] })}`;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (signal.aborted) throw new Error("任务已取消");
-        update(j, { stage: attempt ? `修复脚本（${attempt}/2）` : "生成脚本" });
+        update(j, {
+          attempt,
+          stage: attempt ? `修复脚本（${attempt}/2）` : "生成脚本",
+        });
         const result = await codex.generate(
           p.id,
           project(p.id).threadId,
@@ -383,6 +422,11 @@ async function perform(
           break;
         } catch (e) {
           if (signal.aborted || attempt === 2) throw e;
+          update(j, {
+            error: (e as Error).message,
+            stage: "修复脚本",
+            attempt: attempt + 1,
+          });
           context += `\n本次脚本在 Blender 4.5 执行失败；原版本未改变。请修复脚本。错误：${(e as Error).message}`;
         }
       }
@@ -410,6 +454,7 @@ async function perform(
     if (project(p.id).currentRevisionId !== j.baseRevisionId)
       throw new Error("版本已变化，任务结果未覆盖当前项目");
     // Host copies verified output out of the writable job sandbox into immutable revision storage.
+    update(j, { stage: "保存作品", error: null });
     const rid = uid();
     const out = path.join(DATA, "revisions", rid);
     fs.mkdirSync(out, { recursive: true });

@@ -1,3 +1,4 @@
+import { videoUploads } from "./videos";
 import fs from "node:fs";
 import path from "node:path";
 import { DATA } from "./config";
@@ -33,7 +34,7 @@ export function projectLibrary(trash = false) {
 }
 export function trashProject(id: string, restore = false) {
   const p = project(id, true);
-  if (activeJob(id))
+  if (activeJob(id) || videoUploads.has(id))
     throw Object.assign(new Error("作品正在执行任务，请先等待完成或停止任务"), {
       statusCode: 409,
     });
@@ -50,7 +51,7 @@ export function trashProject(id: string, restore = false) {
 }
 export function purgeProject(id: string) {
   const p = project(id, true);
-  if (!p.deletedAt || activeJob(id))
+  if (!p.deletedAt || activeJob(id) || videoUploads.has(id))
     throw Object.assign(new Error("请先将空闲作品移入回收站"), {
       statusCode: 409,
     });
@@ -60,6 +61,7 @@ export function purgeProject(id: string) {
       ...list<Revision>("revision", id).map((r) => ["revisions", r.id]),
       ...list<Job>("job", id).map((j) => ["jobs", j.id]),
       ["attachments", id],
+      ["videos", id],
       ["codex-workspaces", id],
       ["discussion-workspaces", id],
     ];

@@ -163,7 +163,19 @@ export type Job = {
   updatedAt: string;
   message: string;
   renderArtifactId?: string;
-  events?: { stage: string; at: string }[];
+  title?: string;
+  stageIndex?: number;
+  attempt?: number;
+  estimate?: { low: number; high: number; source: "initial" | "history" };
+  progress?: { completed: number; total: number; remainingSeconds?: number };
+  events?: {
+    stage: string;
+    at: string;
+    endedAt?: string;
+    index?: number;
+    attempt?: number;
+    error?: string;
+  }[];
 };
 export type Render = {
   id: string;
@@ -224,7 +236,78 @@ export type Snapshot = {
   scene: Scene;
   previewUrl: string | null;
   activeJob: Job | null;
+  jobs?: Job[];
+  videos?: VideoRecord[];
   render: Render | null;
   messages: Message[];
   proposals: Proposal[];
+};
+
+export const videoSettingsSchema = z.object({
+  width: z
+    .number()
+    .int()
+    .min(256)
+    .max(1920)
+    .refine((n) => n % 2 === 0),
+  height: z
+    .number()
+    .int()
+    .min(256)
+    .max(1920)
+    .refine((n) => n % 2 === 0),
+  fps: z.literal(30),
+  mode: z.enum(["realtime", "blender"]),
+});
+export type VideoSettings = z.infer<typeof videoSettingsSchema>;
+export const trajectorySchema = z
+  .object({
+    baseRevisionId: z.string().uuid(),
+    settings: videoSettingsSchema,
+    samples: z
+      .array(
+        z.object({
+          time: z.number().finite().min(0).max(60),
+          camera: cameraSchema,
+        }),
+      )
+      .min(2)
+      .max(3602),
+  })
+  .superRefine((v, c) => {
+    for (const { camera } of v.samples) {
+      const d = camera.position.map((n, i) => n - camera.target[i]),
+        u = camera.up;
+      const cross = [
+        d[1] * u[2] - d[2] * u[1],
+        d[2] * u[0] - d[0] * u[2],
+        d[0] * u[1] - d[1] * u[0],
+      ];
+      if (
+        cross.reduce((n, x) => n + x * x, 0) < 1e-12 ||
+        [...camera.position, ...camera.target, ...u].some(
+          (n) => Math.abs(n) > 1e6,
+        )
+      )
+        c.addIssue({ code: "custom", message: "相机坐标或朝向无效" });
+    }
+    if (
+      v.samples[0].time !== 0 ||
+      v.samples.at(-1)!.time < 0.1 ||
+      v.samples.some((s, i) => i > 0 && s.time <= v.samples[i - 1].time)
+    )
+      c.addIssue({ code: "custom", message: "镜头时间必须从零开始并严格递增" });
+  });
+export type Trajectory = z.infer<typeof trajectorySchema>;
+export type VideoRecord = {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  settings: VideoSettings;
+  createdAt: string;
+  duration: number;
+  artifactId?: string;
+  mime?: string;
+  status: "recorded" | "ready";
+  trajectory: Trajectory;
 };

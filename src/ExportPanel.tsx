@@ -1,3 +1,5 @@
+import { VideoExport } from "./VideoExport";
+import type { VideoSettings, Job } from "./types";
 import { useState } from "react";
 import { Box, Download, Image, X } from "lucide-react";
 import type { RenderSettings, Snapshot } from "./types";
@@ -12,18 +14,22 @@ export function ExportPanel({
   onRender,
   onViewImage,
   onClose,
+  onRecord,
+  onJob,
 }: {
   snapshot: Snapshot;
   settings: RenderSettings;
   onSettings: (v: RenderSettings) => void;
   busy: boolean;
   stale: boolean;
-  initial: "model" | "image";
+  initial: "model" | "image" | "video";
   onRender: () => void;
   onViewImage: () => void;
   onClose: () => void;
+  onRecord: (s: VideoSettings) => void;
+  onJob: (j: Job) => void;
 }) {
-  const [tab, setTab] = useState(initial),
+  const [tab, setTab] = useState<"model" | "image" | "video">(initial),
     [preset, setPreset] = useState("custom");
   const render = snapshot.render,
     previous = render?.settings || defaultRenderSettings;
@@ -60,8 +66,21 @@ export function ExportPanel({
             <Image size={16} />
             效果图
           </button>
+          <button
+            className={tab === "video" ? "active" : ""}
+            onClick={() => setTab("video")}
+          >
+            视频
+          </button>
         </div>
-        {tab === "model" ? (
+        {tab === "video" ? (
+          <VideoExport
+            snapshot={snapshot}
+            busy={busy}
+            onRecord={onRecord}
+            onJob={onJob}
+          />
+        ) : tab === "model" ? (
           <>
             <p className="muted">包含当前已保存场景及全部网页修改。</p>
             <div className="export-options">

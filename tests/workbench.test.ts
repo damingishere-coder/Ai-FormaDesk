@@ -237,3 +237,41 @@ describe("图片与作品边界", () => {
       expect(renderSettingsSchema.safeParse({ width }).success).toBe(false);
   });
 });
+
+describe("视频文件随作品清理", () => {
+  it("保留回收站视频，清理失败可重试且不会触及其他作品", () => {
+    const p = create(),
+      other = create();
+    const root = path.join(directory, "videos", p.id),
+      otherRoot = path.join(directory, "videos", other.id);
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(otherRoot, { recursive: true });
+    fs.writeFileSync(path.join(root, "clip.mp4"), "owned-video");
+    fs.writeFileSync(path.join(otherRoot, "keep.mp4"), "other-video");
+    const vid = uid();
+    put("video", {
+      id: vid,
+      projectId: p.id,
+      artifactId: uid(),
+      revisionId: uid(),
+      status: "ready",
+    });
+    trashProject(p.id);
+    expect(fs.existsSync(path.join(root, "clip.mp4"))).toBe(true);
+    trashProject(p.id, true);
+    expect(list("video", p.id)).toHaveLength(1);
+    trashProject(p.id);
+    const backup = root + "-retry";
+    fs.renameSync(root, backup);
+    fs.symlinkSync(otherRoot, root);
+    expect(() => purgeProject(p.id)).toThrow("清理未完成");
+    expect(project(p.id, true).cleanupState).toBe("failed");
+    expect(fs.existsSync(path.join(otherRoot, "keep.mp4"))).toBe(true);
+    fs.unlinkSync(root);
+    fs.renameSync(backup, root);
+    purgeProject(p.id);
+    expect(fs.existsSync(root)).toBe(false);
+    expect(list("video", p.id)).toHaveLength(0);
+    expect(fs.existsSync(path.join(otherRoot, "keep.mp4"))).toBe(true);
+  });
+});

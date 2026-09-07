@@ -48,3 +48,18 @@ export async function uploadAttachment<T>(pid: string, file: File): Promise<T> {
   if (!r.ok) throw new Error(v.error || "上传失败");
   return v;
 }
+
+export async function uploadVideoFile(pid: string, id: string, blob: Blob) {
+  if (!token) await initSession();
+  const r = await fetch(`/api/projects/${pid}/videos/${id}/upload`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-Forma-Session": token,
+    },
+    body: blob,
+  });
+  const v = await r.json();
+  if (!r.ok) throw new Error(v.error || "视频上传失败");
+  return v;
+}

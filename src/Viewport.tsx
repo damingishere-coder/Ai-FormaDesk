@@ -24,6 +24,9 @@ export type ViewportHandle = {
   view: (v: string) => void;
   fit: () => void;
   screenshot: () => string;
+  sampleCamera: () => CameraSpec;
+  restoreCamera: (c: CameraSpec) => void;
+  drawVideo: (target: HTMLCanvasElement) => void;
 };
 export type ViewportProps = {
   url: string | null;
@@ -35,6 +38,7 @@ export type ViewportProps = {
   onTransform: (id: string, t: SceneCommand["transform"]) => void;
   onError: (s: string) => void;
   readOnly?: boolean;
+  hideGizmo?: boolean;
   onCameraChange?: (camera: CameraSpec) => void;
   onReady?: () => void;
   frameAspect?: number;
@@ -61,7 +65,14 @@ function Content({
   props: ViewportProps;
   handle: React.ForwardedRef<ViewportHandle>;
 }) {
-  const { camera, gl, invalidate, size } = useThree();
+  const { camera, gl, invalidate, size, scene } = useThree();
+  const sampleCamera = (): CameraSpec => ({
+    position: camera.position.toArray(),
+    target: orbit.current?.target.toArray() || [0, 0, 0],
+    up: camera.up.toArray(),
+    fov: (camera as THREE.PerspectiveCamera).fov,
+    aspect: (camera as THREE.PerspectiveCamera).aspect,
+  });
   const orbit = useRef<any>(null);
   const transform = useRef<any>(null);
   const [group, setGroup] = useState<THREE.Group | null>(null);
@@ -100,6 +111,43 @@ function Content({
           fov: (camera as THREE.PerspectiveCamera).fov,
           aspect: (camera as THREE.PerspectiveCamera).aspect,
         };
+      },
+      sampleCamera,
+      restoreCamera: (c) => {
+        const controls = orbit.current;
+        if (controls) {
+          controls.enableDamping = false;
+          controls.update();
+        }
+        camera.position.fromArray(c.position);
+        camera.up.fromArray(c.up);
+        controls?.target.fromArray(c.target);
+        camera.lookAt(...c.target);
+        if (controls) {
+          controls.update();
+          controls.enableDamping = true;
+        }
+        invalidate();
+      },
+      drawVideo: (target) => {
+        gl.render(scene, camera);
+        const source = gl.domElement,
+          aspect = target.width / target.height,
+          sw = Math.min(source.width, source.height * aspect),
+          sh = sw / aspect;
+        target
+          .getContext("2d")!
+          .drawImage(
+            source,
+            (source.width - sw) / 2,
+            (source.height - sh) / 2,
+            sw,
+            sh,
+            0,
+            0,
+            target.width,
+            target.height,
+          );
       },
       screenshot: () => gl.domElement.toDataURL("image/png"),
       fit,
@@ -202,7 +250,9 @@ function Content({
         setGroup(loaded);
         setObjects(map);
         requestAnimationFrame(() =>
-          requestAnimationFrame(() => props.onReady?.()),
+          requestAnimationFrame(() => {
+            if (alive) props.onReady?.();
+          }),
         );
       },
       undefined,
@@ -388,15 +438,17 @@ function Content({
           }}
         />
       )}
-      <GizmoHelper
-        alignment="top-right"
-        margin={[58, Math.min(160, size.height * 0.15)]}
-      >
-        <GizmoViewport
-          axisColors={["#dc655e", "#6ba684", "#6398eb"]}
-          labelColor="#fff"
-        />
-      </GizmoHelper>
+      {!props.hideGizmo && (
+        <GizmoHelper
+          alignment="top-right"
+          margin={[58, Math.min(160, size.height * 0.15)]}
+        >
+          <GizmoViewport
+            axisColors={["#dc655e", "#6ba684", "#6398eb"]}
+            labelColor="#fff"
+          />
+        </GizmoHelper>
+      )}
     </>
   );
 }

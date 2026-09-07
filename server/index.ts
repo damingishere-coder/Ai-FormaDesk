@@ -1,3 +1,4 @@
+import { createVideo, uploadVideo, ownedVideo, videoUploads } from "./videos";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import statics from "@fastify/static";
@@ -197,6 +198,26 @@ app.patch<{ Params: { id: string } }>("/api/projects/:id", async (req) => {
   put("project", { ...p, name, updatedAt: now() });
   return project(p.id);
 });
+app.post<{ Params: { id: string } }>(
+  "/api/projects/:id/videos",
+  { bodyLimit: 2 * 1024 * 1024 },
+  async (req) => createVideo(req.params.id, req.body),
+);
+app.post<{ Params: { id: string; videoId: string } }>(
+  "/api/projects/:id/videos/:videoId/upload",
+  { bodyLimit: 128 * 1024 * 1024 },
+  async (req) =>
+    uploadVideo(req.params.id, req.params.videoId, req.body as Buffer),
+);
+app.post<{ Params: { id: string; videoId: string } }>(
+  "/api/projects/:id/videos/:videoId/render",
+  async (req) => {
+    const v = ownedVideo(req.params.id, req.params.videoId);
+    if (v.settings.mode !== "blender" || v.status === "ready")
+      throw new Error("该视频无需渲染");
+    return enqueue(v.projectId, v.revisionId, "video", { videoId: v.id });
+  },
+);
 app.get<{ Params: { id: string } }>(
   "/api/projects/:id/scene",
   async (req): Promise<Snapshot> => {
@@ -213,6 +234,8 @@ app.get<{ Params: { id: string } }>(
       },
       previewUrl: r ? `/api/artifacts/${r.artifacts.glb}` : null,
       activeJob: activeJob(p.id),
+      jobs: list<Job>("job", p.id),
+      videos: list<any>("video", p.id),
       render: latestRender(p.id),
       messages: list<any>("message", p.id),
       proposals: list<Proposal>("proposal", p.id),
@@ -365,11 +388,45 @@ app.get<{ Params: { id: string }; Querystring: { download?: string } }>(
       .header("Cache-Control", "private, max-age=31536000, immutable");
     if (req.query.download)
       reply.header("Content-Disposition", `attachment; filename="${a.name}"`);
-    return reply.send(fs.createReadStream(p));
+    const size = fs.statSync(p).size;
+    reply.header("Accept-Ranges", "bytes");
+    const range = req.headers.range;
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (!match || (!match[1] && !match[2]))
+        return reply
+          .code(416)
+          .header("Content-Range", `bytes */${size}`)
+          .send();
+      const start = match[1]
+        ? Number(match[1])
+        : Math.max(0, size - Number(match[2]));
+      const end = match[1]
+        ? match[2]
+          ? Math.min(size - 1, Number(match[2]))
+          : size - 1
+        : size - 1;
+      if (
+        !Number.isSafeInteger(start) ||
+        !Number.isSafeInteger(end) ||
+        start > end ||
+        start >= size
+      )
+        return reply
+          .code(416)
+          .header("Content-Range", `bytes */${size}`)
+          .send();
+      return reply
+        .code(206)
+        .header("Content-Range", `bytes ${start}-${end}/${size}`)
+        .header("Content-Length", end - start + 1)
+        .send(fs.createReadStream(p, { start, end }));
+    }
+    return reply.header("Content-Length", size).send(fs.createReadStream(p));
   },
 );
-if (fs.existsSync(path.join(ROOT, "dist")))
-  await app.register(statics, { root: path.join(ROOT, "dist") });
+const webRoot = process.env.ZAOWU_WEB_DIR || path.join(ROOT, "dist");
+if (fs.existsSync(webRoot)) await app.register(statics, { root: webRoot });
 else
   app.get("/", async (_, reply) =>
     reply

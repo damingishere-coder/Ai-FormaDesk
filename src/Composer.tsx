@@ -1,3 +1,6 @@
+import { useChatLayout } from "./useChatLayout";
+import { BuildProgress } from "./BuildProgress";
+import { etaText } from "./progress";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   ArrowUp,
@@ -52,6 +55,9 @@ export function Composer({
   onHealth,
   onError,
   suggested,
+  preview,
+  disconnected,
+  onReload,
 }: {
   snapshot: Snapshot;
   busy: boolean;
@@ -67,7 +73,56 @@ export function Composer({
   onHealth: () => void;
   onError: (e: string) => void;
   suggested: string;
+  preview: "loading" | "ready" | "failed";
+  disconnected: boolean;
+  onReload: () => void;
 }) {
+  const layout = useChatLayout(expanded);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const form = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    const el = form.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() =>
+      layout.setCollapsedHeight(el.offsetHeight + 90),
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const [flow, setFlow] = useState(false);
+  const [time, setTime] = useState(Date.now());
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(() => setTime(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
+  const buildJob =
+    job?.type === "generate"
+      ? job
+      : [...(snapshot.jobs || [])]
+          .reverse()
+          .find((j) => j.type === "generate") || null;
+  useEffect(() => {
+    if (
+      buildJob &&
+      ["queued", "running", "failed", "cancelled"].includes(buildJob.status)
+    ) {
+      setFlow(true);
+      onExpanded(true);
+    }
+  }, [buildJob?.id]);
+  useEffect(() => {
+    if (buildJob?.status === "succeeded" && preview === "ready") setFlow(false);
+  }, [buildJob?.status, preview]);
+  const retry = () => {
+    const p = [...(snapshot.proposals || [])]
+      .reverse()
+      .find(
+        (p) =>
+          p.jobId === buildJob?.id && ["failed", "ready"].includes(p.status),
+      );
+    if (p) onBuild(p);
+  };
   const pid = snapshot.project.id;
   if (!drafts.has(pid)) drafts.set(pid, { text: "", images: [] });
   const draft = useSyncExternalStore(
@@ -87,8 +142,8 @@ export function Composer({
     [dragOver, setDragOver] = useState(false);
   const list = useRef<HTMLDivElement>(null),
     nearBottom = useRef(true),
-    chooser = useRef<HTMLInputElement>(null),
-    gesture = useRef<number | null>(null);
+    scrollPosition = useRef(0),
+    chooser = useRef<HTMLInputElement>(null);
   const update = (fn: (d: Draft) => Draft) => {
     const next = fn(drafts.get(pid) || current.current);
     drafts.set(pid, next);
@@ -101,6 +156,13 @@ export function Composer({
       onExpanded(true);
     }
   }, [suggested]);
+  useEffect(() => {
+    if (textarea.current) {
+      textarea.current.style.height = "auto";
+      textarea.current.style.height =
+        Math.min(160, Math.max(48, textarea.current.scrollHeight)) + "px";
+    }
+  }, [draft.text, layout.layout.width]);
   const messageVersion = snapshot.messages
     .map((m) => `${m.id}:${m.status}:${m.text}`)
     .join("\n");
@@ -118,11 +180,15 @@ export function Composer({
     else setNewReply(true);
   }, [messageVersion]);
   useEffect(() => {
-    if (expanded && nearBottom.current)
+    if (expanded && !flow)
       requestAnimationFrame(() =>
-        list.current?.scrollTo({ top: list.current.scrollHeight }),
+        list.current?.scrollTo({
+          top: nearBottom.current
+            ? list.current.scrollHeight
+            : scrollPosition.current,
+        }),
       );
-  }, [expanded]);
+  }, [expanded, flow]);
   useEffect(() => {
     const escape = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -237,6 +303,9 @@ export function Composer({
   return (
     <section
       className={`composer-wrap ${expanded ? "expanded" : ""} ${dragOver ? "drag-over" : ""}`}
+      style={layout.style}
+      data-moved={layout.layout.moved}
+      data-dragging={layout.dragging}
       aria-label="AI 创作对话"
       onDragOver={(e) => {
         if (Array.from(e.dataTransfer.types).includes("Files")) {
@@ -255,163 +324,187 @@ export function Composer({
       }}
     >
       <div className="composer glass">
-        <button
-          className="chat-handle"
-          aria-label={expanded ? "收起创作对话" : "展开创作对话"}
-          aria-expanded={expanded}
-          onClick={() => {
-            if (gesture.current === -1) {
-              gesture.current = null;
-              return;
-            }
-            onExpanded(!expanded);
-          }}
-          onPointerDown={(e) => {
-            gesture.current = e.clientY;
-            e.currentTarget.setPointerCapture(e.pointerId);
-          }}
-          onPointerUp={(e) => {
-            if (
-              gesture.current !== null &&
-              Math.abs(e.clientY - gesture.current) > 30
-            ) {
-              onExpanded(e.clientY < gesture.current);
-              e.preventDefault();
-            }
-            gesture.current =
-              Math.abs(e.clientY - (gesture.current ?? e.clientY)) > 30
-                ? -1
-                : null;
-          }}
-        >
-          <span className="handle-bar" />
-          <span>
-            <MessageSquare size={13} /> {expanded ? "创作对话" : "聊聊你的想法"}
-          </span>
-          <ChevronDown size={15} className={expanded ? "" : "flipped"} />
-        </button>
+        <header className="chat-titlebar">
+          <button
+            className="chat-handle"
+            aria-label="移动创作对话"
+            onPointerDown={(e) => layout.start(e)}
+            onClick={() => {
+              if (!layout.moved.current) onExpanded(!expanded);
+            }}
+          >
+            <span className="handle-bar" />
+            <MessageSquare size={15} />
+            <span>创作对话</span>
+            {!expanded && busy && (
+              <small title={job ? etaText(job, time) : undefined}>
+                {job?.stage} · {job ? etaText(job, time) : ""}
+              </small>
+            )}
+          </button>
+          <button
+            className="icon"
+            title="恢复默认布局"
+            aria-label="恢复默认布局"
+            onClick={layout.reset}
+          >
+            <RotateCw size={14} />
+          </button>
+          <button
+            className="icon"
+            aria-label={expanded ? "收起创作对话" : "展开创作对话"}
+            aria-expanded={expanded}
+            onClick={() => onExpanded(!expanded)}
+          >
+            <ChevronDown size={16} className={expanded ? "" : "flipped"} />
+          </button>
+        </header>
         <div
           className="conversation-reveal"
           aria-hidden={!expanded}
           inert={!expanded}
         >
-          <div
-            className="conversation-scroll"
-            ref={list}
-            tabIndex={0}
-            onWheel={(e) => {
-              if (e.deltaY < 0) nearBottom.current = false;
-            }}
-            onTouchMove={() => {
-              nearBottom.current = false;
-            }}
-            onKeyDown={(e) => {
-              if (["PageUp", "Home", "ArrowUp"].includes(e.key))
+          {flow && buildJob ? (
+            <BuildProgress
+              job={buildJob}
+              preview={preview}
+              disconnected={disconnected}
+              onRetry={retry}
+              onReload={onReload}
+              onStop={onStop}
+              onChat={() => setFlow(false)}
+            />
+          ) : (
+            <div
+              className="conversation-scroll"
+              ref={list}
+              tabIndex={0}
+              onWheel={(e) => {
+                if (e.deltaY < 0) nearBottom.current = false;
+              }}
+              onTouchMove={() => {
                 nearBottom.current = false;
-            }}
-            onScroll={() => {
-              const el = list.current!;
-              if (el.scrollHeight - el.scrollTop - el.clientHeight < 70) {
-                nearBottom.current = true;
-                setNewReply(false);
-              }
-            }}
-          >
-            {!snapshot.messages.length && (
-              <div className="chat-welcome">
-                <Box size={26} strokeWidth={1.2} />
-                <h3>先聊想法，再让它成形。</h3>
-                <p>
-                  发一张参考图，或说说还没想清楚的细节。
-                  <br />
-                  方案确定后，由你点击开始建模。
-                </p>
-              </div>
-            )}
-            {snapshot.messages.map((m) => (
-              <article className={`conversation-message ${m.role}`} key={m.id}>
-                <small>
-                  {m.role === "user"
-                    ? "你"
-                    : m.role === "error"
-                      ? "执行反馈"
-                      : "Codex"}
-                </small>
-                {!!m.attachmentIds?.length && (
-                  <div className="message-images">
-                    {m.attachmentIds.map((id, i) => (
-                      <button
-                        key={id}
-                        onClick={() => setLightbox(imageUrl(pid, id))}
-                      >
-                        <img src={imageUrl(pid, id)} alt={`图 ${i + 1}`} />
-                        <span>图 {i + 1}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {m.status === "pending" ? (
-                  <p className="thinking">
-                    <Loader2 size={14} className="spin" />
-                    {job?.stage || "正在思考…"}
+              }}
+              onKeyDown={(e) => {
+                if (["PageUp", "Home", "ArrowUp"].includes(e.key))
+                  nearBottom.current = false;
+              }}
+              onScroll={() => {
+                const el = list.current!;
+                scrollPosition.current = el.scrollTop;
+                if (el.scrollHeight - el.scrollTop - el.clientHeight < 70) {
+                  nearBottom.current = true;
+                  setNewReply(false);
+                }
+              }}
+            >
+              {buildJob && (
+                <button className="flow-summary" onClick={() => setFlow(true)}>
+                  {buildJob.status === "succeeded"
+                    ? "✓ 建模记录"
+                    : buildJob.stage}{" "}
+                  · 查看流程与耗时
+                </button>
+              )}
+              {!snapshot.messages.length && (
+                <div className="chat-welcome">
+                  <Box size={26} strokeWidth={1.2} />
+                  <h3>先聊想法，再让它成形。</h3>
+                  <p>
+                    发一张参考图，或说说还没想清楚的细节。
+                    <br />
+                    方案确定后，由你点击开始建模。
                   </p>
-                ) : (
-                  <p>{m.text}</p>
-                )}
-                {m.proposalId &&
-                  (() => {
-                    const p = snapshot.proposals?.find(
-                      (p) => p.id === m.proposalId,
-                    );
-                    if (!p) return null;
-                    const usable =
-                      ["ready", "failed"].includes(p.status) &&
-                      p.baseRevisionId === snapshot.project.currentRevisionId;
-                    return (
-                      <div className="proposal-card">
-                        <small>建模方案</small>
-                        <h3>{p.title}</h3>
-                        <p>{p.description}</p>
-                        {!!p.attachmentIds.length && (
-                          <div className="proposal-images">
-                            {p.attachmentIds.map((id, i) => (
-                              <button
-                                key={id}
-                                onClick={() => setLightbox(imageUrl(pid, id))}
-                              >
-                                <img
-                                  src={imageUrl(pid, id)}
-                                  alt={`方案参考图 ${i + 1}`}
-                                />
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                </div>
+              )}
+              {snapshot.messages.map((m) => (
+                <article
+                  className={`conversation-message ${m.role}`}
+                  key={m.id}
+                >
+                  <small>
+                    {m.role === "user"
+                      ? "你"
+                      : m.role === "error"
+                        ? "执行反馈"
+                        : "Codex"}
+                  </small>
+                  {!!m.attachmentIds?.length && (
+                    <div className="message-images">
+                      {m.attachmentIds.map((id, i) => (
                         <button
-                          className="button dark"
-                          disabled={!usable || busy || !modelReady}
-                          onClick={() => onBuild(p)}
+                          key={id}
+                          onClick={() => setLightbox(imageUrl(pid, id))}
                         >
-                          <Play size={14} />
-                          {p.status === "succeeded"
-                            ? "已完成"
-                            : p.status === "running"
-                              ? "正在建模"
-                              : !usable
-                                ? "方案已过期，请继续讨论"
-                                : p.status === "failed"
-                                  ? "重试建模"
-                                  : p.baseRevisionId
-                                    ? "应用修改"
-                                    : "开始建模"}
+                          <img src={imageUrl(pid, id)} alt={`图 ${i + 1}`} />
+                          <span>图 {i + 1}</span>
                         </button>
-                      </div>
-                    );
-                  })()}
-              </article>
-            ))}
-          </div>
-          {newReply && (
+                      ))}
+                    </div>
+                  )}
+                  {m.status === "pending" ? (
+                    <p className="thinking">
+                      <Loader2 size={14} className="spin" />
+                      {job?.stage || "正在思考…"}
+                    </p>
+                  ) : (
+                    <p>{m.text}</p>
+                  )}
+                  {m.proposalId &&
+                    (() => {
+                      const p = snapshot.proposals?.find(
+                        (p) => p.id === m.proposalId,
+                      );
+                      if (!p) return null;
+                      const usable =
+                        ["ready", "failed"].includes(p.status) &&
+                        p.baseRevisionId === snapshot.project.currentRevisionId;
+                      return (
+                        <div className="proposal-card">
+                          <small>建模方案</small>
+                          <h3>{p.title}</h3>
+                          <p>{p.description}</p>
+                          {!!p.attachmentIds.length && (
+                            <div className="proposal-images">
+                              {p.attachmentIds.map((id, i) => (
+                                <button
+                                  key={id}
+                                  onClick={() => setLightbox(imageUrl(pid, id))}
+                                >
+                                  <img
+                                    src={imageUrl(pid, id)}
+                                    alt={`方案参考图 ${i + 1}`}
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <button
+                            className="button dark"
+                            disabled={!usable || busy || !modelReady}
+                            onClick={() => onBuild(p)}
+                          >
+                            <Play size={14} />
+                            {p.status === "succeeded"
+                              ? "已完成"
+                              : p.status === "running"
+                                ? "正在建模"
+                                : !usable
+                                  ? "方案已过期，请继续讨论"
+                                  : p.status === "failed"
+                                    ? "重试建模"
+                                    : p.baseRevisionId
+                                      ? "应用修改"
+                                      : "开始建模"}
+                          </button>
+                        </div>
+                      );
+                    })()}
+                </article>
+              ))}
+            </div>
+          )}
+          {newReply && !flow && (
             <button
               className="new-reply"
               onClick={() => {
@@ -436,7 +529,9 @@ export function Composer({
           <span className="context-dot" />
           <span className="context-text">
             {busy
-              ? job?.stage || "正在提交…"
+              ? disconnected
+                ? "正在重新连接"
+                : job?.stage || "正在提交…"
               : object
                 ? `正在讨论：${object.name}`
                 : "先讨论想法，确认方案后再建模。"}
@@ -444,6 +539,7 @@ export function Composer({
           {busy && <Loader2 size={14} className="spin" />}
         </div>
         <form
+          ref={form}
           onSubmit={(e) => {
             e.preventDefault();
             void send();
@@ -485,6 +581,7 @@ export function Composer({
             </div>
           )}
           <textarea
+            ref={textarea}
             aria-label="创作想法"
             value={draft.text}
             placeholder="说说你的想法，或添加参考图片…"
@@ -559,6 +656,16 @@ export function Composer({
           </div>
         </form>
       </div>
+      {expanded &&
+        ["n", "s", "e", "w", "ne", "nw", "se", "sw"].map((edge) => (
+          <div
+            key={edge}
+            role="separator"
+            aria-label={`调整聊天窗口 ${edge}`}
+            className={`chat-resize ${edge}`}
+            onPointerDown={(e) => layout.start(e, edge)}
+          />
+        ))}
       {lightbox &&
         createPortal(
           <div

@@ -1,3 +1,5 @@
+import { VideoRecorder } from "./VideoRecorder";
+import type { VideoSettings } from "./types";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
@@ -64,6 +66,12 @@ export function App() {
     [renderView, setRenderView] = useState(false),
     [view, setView] = useState("perspective"),
     [reloadKey, setReloadKey] = useState(0);
+  const [recording, setRecording] = useState<VideoSettings | null>(null);
+  const [previewStatus, setPreviewStatus] = useState<
+    "loading" | "ready" | "failed"
+  >("loading");
+  const [previewRevision, setPreviewRevision] = useState<string | null>(null);
+  const [disconnected, setDisconnected] = useState(false);
   const [chatExpanded, setChatExpanded] = useState(false);
   const [showRender, setShowRender] = useState(false);
   const [settings, setSettings] = useState<RenderSettings>(
@@ -152,12 +160,13 @@ export function App() {
     let ending = false;
     const receive = async (j: Job) => {
       if (disposed || currentPid.current !== p) return;
+      setDisconnected(false);
       setJob(j);
       if (terminal(j) && !ending) {
         ending = true;
         setSubmitting(false);
         submitLock.current = false;
-        if (j.type !== "discuss" && j.type !== "render")
+        if (j.type !== "discuss" && j.type !== "render" && j.type !== "video")
           setReloadKey((k) => k + 1);
         await load(p);
         if (j.status === "succeeded") {
@@ -178,6 +187,7 @@ export function App() {
     const source = new EventSource(`/api/jobs/${jid}/events`);
     source.onmessage = (e) => void receive(JSON.parse(e.data));
     source.onerror = () => {
+      setDisconnected(true);
       void api<Job>(`/jobs/${jid}`)
         .then(receive)
         .catch((e) => setError(e.message));
@@ -198,7 +208,7 @@ export function App() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (document.querySelector(".project-library")) return;
+      if (recording || document.querySelector(".project-library")) return;
       if (
         target.closest("input,textarea,select,[contenteditable=true]") ||
         busy
@@ -223,7 +233,7 @@ export function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [busy]);
+  }, [busy, recording]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(""), 5000);
@@ -268,6 +278,8 @@ export function App() {
     );
   }
   async function buildProposal(proposal: Proposal) {
+    setChatExpanded(true);
+    setPreviewStatus("loading");
     await startJob("generate", { proposalId: proposal.id });
   }
   async function command(c: Partial<SceneCommand>, id = selected) {
@@ -332,7 +344,7 @@ export function App() {
           ),
         )));
   return (
-    <div className="workbench">
+    <div className={"workbench " + (recording ? "is-recording" : "")}>
       <header className="topbar">
         <a className="brand" href="/" aria-label="Ai-FormaDesk 首页">
           <span className="brand-mark">
@@ -406,7 +418,15 @@ export function App() {
       <main
         className="canvas-stage"
         aria-label="三维工作画布"
-        onPointerDown={() => setChatExpanded(false)}
+        onPointerDown={() => {
+          if (
+            !recording &&
+            document
+              .querySelector(".composer-wrap")
+              ?.getAttribute("data-moved") !== "true"
+          )
+            setChatExpanded(false);
+        }}
       >
         {snapshot && (
           <Viewport
@@ -419,16 +439,33 @@ export function App() {
             }
             scene={snapshot.scene}
             selected={selected}
-            readOnly={renderView}
+            readOnly={renderView || !!recording}
+            hideGizmo={!!recording}
             onCameraChange={onCameraChange}
-            frameAspect={renderView ? frameAspect : undefined}
-            onSelect={setSelected}
+            frameAspect={
+              recording
+                ? recording.width / recording.height
+                : renderView
+                  ? frameAspect
+                  : undefined
+            }
+            onSelect={(id) => {
+              if (!recording) setSelected(id);
+            }}
             mode={mode}
             busy={busy}
             onTransform={(id, t) =>
               void command({ operation: "transform", transform: t }, id)
             }
-            onError={setError}
+            onReady={() => {
+              setPreviewRevision(base);
+              setPreviewStatus("ready");
+            }}
+            onError={(message) => {
+              setError(message);
+              setPreviewRevision(base);
+              setPreviewStatus("failed");
+            }}
           />
         )}
       </main>
@@ -593,6 +630,12 @@ export function App() {
           snapshot={snapshot}
           busy={busy}
           job={job}
+          preview={previewRevision === base ? previewStatus : "loading"}
+          disconnected={disconnected}
+          onReload={() => {
+            setPreviewStatus("loading");
+            setReloadKey((k) => k + 1);
+          }}
           aiReady={!!health?.codex?.ok}
           modelReady={!!health?.ok}
           selected={selected}
@@ -720,20 +763,47 @@ export function App() {
           onError={setError}
         />
       )}
-      {["export", "render"].includes(panel) && snapshot && (
+      {["export", "render", "video"].includes(panel) && snapshot && (
         <ExportPanel
-          snapshot={snapshot}
+          snapshot={{
+            ...snapshot,
+            activeJob: job && !terminal(job) ? job : null,
+          }}
           settings={settings}
           onSettings={setSettings}
-          busy={busy}
+          onRecord={(s) => {
+            setRecording(s);
+            setPanel("");
+          }}
+          onJob={(j) => {
+            setJob(j);
+            void load(pid);
+          }}
+          busy={busy || previewStatus !== "ready" || previewRevision !== base}
           stale={renderStale}
-          initial={panel === "render" ? "image" : "model"}
+          initial={
+            panel === "video" ? "video" : panel === "render" ? "image" : "model"
+          }
           onRender={() => void render()}
           onViewImage={() => {
             setPanel("");
             setShowRender(true);
           }}
           onClose={() => setPanel("")}
+        />
+      )}
+      {recording && base && (
+        <VideoRecorder
+          pid={pid}
+          base={base}
+          settings={recording}
+          viewport={viewport}
+          onClose={() => {
+            setRecording(null);
+            setPanel("video");
+          }}
+          onSaved={() => void load(pid)}
+          onRender={(id) => startJob(`videos/${id}/render`, {})}
         />
       )}
       {["history", "health"].includes(panel) && (
