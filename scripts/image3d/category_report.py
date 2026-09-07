@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import shutil
 
-p=argparse.ArgumentParser();p.add_argument('--batch',type=Path,required=True);p.add_argument('--data',type=Path,required=True);p.add_argument('--samples',type=Path,required=True);p.add_argument('--private-photo',type=Path);args=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--batch',type=Path,required=True);p.add_argument('--data',type=Path,required=True);p.add_argument('--samples',type=Path,required=True);p.add_argument('--private-photo',type=Path);p.add_argument('--previous-cat-model',type=Path);args=p.parse_args()
 report=json.loads((args.batch/'category-report.json').read_text());output=args.batch/'visual-report';output.mkdir(exist_ok=True)
 sources={s['file']:s for s in json.loads((Path(__file__).resolve().parents[2]/'image3d/samples.lock.json').read_text())['samples']}
 categories={'object':'日常物品','animal':'动物','building':'建筑','person':'人物','plant':'植物'}
@@ -17,6 +17,8 @@ for index,sample in enumerate(report['samples']):
     source=args.private_photo if sample['file']=='private-cat-reference.png' else args.samples/sample['file']
     job=args.data/'jobs'/sample.get('jobId','missing')/'attempt-0'/'inference'
     candidates=[('原始照片',source)]
+    if sample['file']=='private-cat-reference.png' and args.previous_cat_model:
+        candidates.append(('原先的脚本模型',args.previous_cat_model))
     run=json.loads((job/'run.json').read_text()) if (job/'run.json').is_file() else {}
     if (job/'textured.glb').is_file():
         candidates.extend((label,job/f'textured-view-{i}.png') for i,label in enumerate(['正面纹理','左侧纹理','右侧纹理','背面纹理（推测）']))
@@ -30,7 +32,7 @@ for index,sample in enumerate(report['samples']):
         if file is None or not file.is_file():continue
         name=f'{index}-{number}{file.suffix}'
         shutil.copyfile(file,output/name)
-        figures.append(f'<figure><img src="{name}" loading="lazy" alt="{html.escape(label)}"><figcaption>{html.escape(label)}</figcaption></figure>')
+        figures.append(f'<figure><a href="{name}" target="_blank"><img src="{name}" loading="lazy" alt="{html.escape(label)}"></a><figcaption>{html.escape(label)}</figcaption></figure>')
     summary=sample.get('qualitySummary') or sample.get('error') or '尚未完成'
     checks=run.get('shapeReviews',[])
     details=''.join(f'<li>形体检查 {i+1}：{html.escape(v.get("quality",{}).get("summary",v.get("error","未完成")))}</li>' for i,v in enumerate(checks))
