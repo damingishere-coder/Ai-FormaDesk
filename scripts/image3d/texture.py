@@ -13,6 +13,16 @@ import sys
 import time
 import urllib.request
 import urllib.error
+import socket
+
+
+def assert_port_available(port):
+    # A cancelled server can leave TIME_WAIT sockets. Reuse that socket state,
+    # while bind + listen still rejects an unrelated live listener.
+    with socket.socket() as sock:
+        sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+        sock.bind(('127.0.0.1',port))
+        sock.listen(1)
 
 
 def request(port, path, value=None):
@@ -51,6 +61,8 @@ def main():
         (base/folder).mkdir(parents=True,exist_ok=True)
     node=base/'custom_nodes/ComfyUI_IPAdapter_plus'
     if not node.exists():node.symlink_to(runtime/'sources/ipadapter-plus',target_is_directory=True)
+    adapter=base/'custom_nodes/FormaDesk'
+    if not adapter.exists():adapter.symlink_to(Path(__file__).resolve().parents[2]/'native/image3d/comfy_nodes',target_is_directory=True)
     if not args.check_only:
         for name in ['reference.png','depth.png']:
             shutil.copyfile(job/name,base/'input'/name)
@@ -59,7 +71,9 @@ def main():
     config.write_text('formadesk:\n  base_path: '+json.dumps(str(runtime/'models/comfy'))+'\n'+
                       ''.join(f'  {key}: {key}\n' for key in ['checkpoints','controlnet','loras','ipadapter','clip_vision']))
     workflow=json.loads((job/'workflow.json').read_text())
-    allowed={'CheckpointLoaderSimple','CLIPTextEncode','CLIPSetLastLayer','LoraLoader',
+    allowed={'CheckpointLoaderSimple','CLIPTextEncode','CLIPSetLastLayer','LoraLoader','LoraLoaderBypassModelOnly',
+             'FormaConditioning','FormaDiffusionModel','FormaDecodeVAE','IPAdapterModelLoader','IPAdapterEmbeds',
+             'FormaIPModel','FormaDepthModel',
              'EmptyLatentImage','KSampler','VAEDecode','SaveImage','LoadImage',
              'IPAdapterUnifiedLoader','IPAdapterAdvanced','IPAdapter','ControlNetLoader','ControlNetApplyAdvanced'}
     for node in workflow['prompt'].values():
@@ -69,11 +83,10 @@ def main():
              '--base-directory',str(base),'--extra-model-paths-config',str(config),
              '--listen','127.0.0.1','--port',str(args.port),'--lowvram','--force-fp16',
              '--cpu-vae','--fp32-vae','--cache-none',
+             '--use-split-cross-attention',
              '--disable-auto-launch','--disable-api-nodes','--disable-metadata']
     # Refuse to talk to an unrelated server occupying this port.
-    import socket
-    with socket.socket() as sock:
-        sock.bind(('127.0.0.1',args.port))
+    assert_port_available(args.port)
     with (job/'comfy-server.log').open('wb') as log:
         child=subprocess.Popen(command,cwd=job,stdout=log,stderr=subprocess.STDOUT)
         started=time.monotonic()

@@ -176,6 +176,54 @@ def build_workflow(runtime, job, prompt):
     manager._configure_resolution(graph,settings,ids)
     manager._configure_ipadapter(graph,settings,{'name':'reference.png'},ids)
     graph = manager._build_controlnet_chain(graph,settings,{'depth':{'name':'depth.png'}},ids)
+    # Lightning contains UNet adapters only. The pinned ComfyUI bypass node
+    # applies their low-rank forward path without retaining patched full weights.
+    # This remains an experimental compatibility probe until real inference passes.
+    for key,node in list(graph.items()):
+        if node['class_type']=='LoraLoader':
+            clip=node['inputs'].pop('clip')
+            node['inputs'].pop('strength_clip',None)
+            node['class_type']='LoraLoaderBypassModelOnly'
+            for consumer in graph.values():
+                for name,value in list(consumer['inputs'].items()):
+                    if value==[key,1]:consumer['inputs'][name]=clip
+    def single(kind):
+        found=[key for key,node in graph.items() if node['class_type']==kind]
+        if len(found)!=1:raise RuntimeError('固定工作流节点结构已变化：'+kind)
+        return found[0]
+    checkpoint=single('CheckpointLoaderSimple')
+    checkpoint_name=graph[checkpoint]['inputs']['ckpt_name']
+    adapter=single('IPAdapter')
+    adapter_loader=single('IPAdapterUnifiedLoader')
+    patched_model=graph[adapter_loader]['inputs']['model']
+    conditioning='forma-conditioning'
+    graph[conditioning]={'class_type':'FormaConditioning','inputs':{
+        'checkpoint':checkpoint_name,'clip_vision':'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors',
+        'ipadapter':'ip-adapter-plus_sdxl_vit-h.safetensors',
+        'positive':graph[ids['pos_prompt']]['inputs']['text'],
+        'negative':graph[ids['neg_prompt']]['inputs']['text'],
+        'image':graph[adapter]['inputs']['image']}}
+    graph[checkpoint]={'class_type':'FormaDiffusionModel','inputs':{
+        'checkpoint':checkpoint_name,'ready':[conditioning,4]}}
+    graph[adapter_loader]={'class_type':'FormaIPModel','inputs':{
+        'ipadapter':'ip-adapter-plus_sdxl_vit-h.safetensors','model':patched_model}}
+    adapter_inputs=graph[adapter]['inputs']
+    graph[adapter]={'class_type':'IPAdapterEmbeds','inputs':{
+        'model':patched_model,'ipadapter':[adapter_loader,0],
+        'pos_embed':[conditioning,2],'neg_embed':[conditioning,3],
+        'weight':adapter_inputs['weight'],'weight_type':'linear','embeds_scaling':'V only',
+        'start_at':adapter_inputs['start_at'],'end_at':adapter_inputs['end_at']}}
+    depth=single('ControlNetLoader')
+    graph[depth]={'class_type':'FormaDepthModel','inputs':{
+        'controlnet':graph[depth]['inputs']['control_net_name'],'model':[adapter,0]}}
+    for node in graph.values():
+        if node['class_type']=='ControlNetApplyAdvanced':
+            node['inputs']['positive']=[conditioning,0];node['inputs']['negative']=[conditioning,1]
+            node['inputs'].pop('vae',None)  # SDXL depth ControlNet consumes pixels.
+    decode=single('VAEDecode')
+    graph['forma-vae']={'class_type':'FormaDecodeVAE','inputs':{
+        'checkpoint':checkpoint_name,'samples':graph[decode]['inputs']['samples']}}
+    graph[decode]['inputs']['vae']=['forma-vae',0]
     out = ids['save_image']
     image_input = graph[out]['inputs']['images']
     graph[out] = {'class_type':'SaveImage','inputs':{'images':image_input,'filename_prefix':'texture'}}
@@ -190,7 +238,8 @@ def build_workflow(runtime, job, prompt):
                 visit(value[0])
     visit(out)
     (job/'workflow.json').write_text(json.dumps({'prompt':retained,'outputNode':out},indent=2))
-    return {'nodes':len(retained),'engine':'StableGen.WorkflowManager','steps':8,'resolution':512}
+    return {'nodes':len(retained),'engine':'StableGen.WorkflowManager','steps':8,'resolution':512,
+            'loraApplication':'ComfyUI bypass model-only (experimental)'}
 
 
 def projection_bake(runtime, job, blend, texture, atlas):

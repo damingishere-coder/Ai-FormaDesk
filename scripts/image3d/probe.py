@@ -36,6 +36,8 @@ def main():
     p.add_argument('--blend',type=Path)
     p.add_argument('--glb',type=Path)
     p.add_argument('--budget',type=int,default=1800)
+    p.add_argument('--memory-limit-gib',type=int,choices=[11,12],default=11,
+                   help='Stage A controlled memory limit; default remains conservative')
     p.add_argument('--atlas',type=int,choices=[256,512,1024,2048],default=512)
     p.add_argument('--prompt',default='a blue ceramic vase, realistic surface, single object')
     args=p.parse_args()
@@ -64,7 +66,7 @@ def main():
     if args.case not in ['workflow','environment']:
         if not args.image:p.error('需要 --image')
         shutil.copyfile(args.image,job/'reference.png')
-    r=Runtime(runtime,job,args.budget)
+    r=Runtime(runtime,job,args.budget,memory_limit_bytes=args.memory_limit_gib*1024**3)
     r.report.update({'case':args.case,'sources':sources,'weights':weights,
                      'parameters':{**LOCK['defaults'],'budgetSeconds':r.budget,
                                    'texture':{**LOCK['defaults']['texture'],'atlas':args.atlas}},
@@ -115,10 +117,20 @@ def main():
             if args.case in ['environment','texture','full']:
                 python=runtime/'comfy-venv/bin/python'
                 texture_script=Path(__file__).with_name('texture.py').resolve()
+                r.report['textureRuntime']={
+                    'adapterSha256':sha256(ROOT/'native/image3d/comfy_nodes/__init__.py'),
+                    'runnerSha256':sha256(texture_script),'workflowSha256':sha256(job/'workflow.json'),
+                    'loading':'sequential-components-stream-depth','depthDevice':'mps','diffusionDevice':'mps',
+                    'loraApplication':'bypass-model-only-experimental','attention':'split',
+                    'mpsHighWatermarkRatio':1.0,'mpsLowWatermarkRatio':.65}
+                r.save()
                 stage('texture',[python,texture_script,'--runtime',runtime,'--job',job,
                                  *(['--check-only'] if args.case=='environment' else [])],
                       [Path(sys.base_prefix),runtime/'comfy-venv',runtime/'sources/comfyui',
-                       runtime/'sources/ipadapter-plus',runtime/'models/comfy',script.parent],port=8189,gpu=True)
+                       runtime/'sources/ipadapter-plus',runtime/'models/comfy',script.parent,
+                       ROOT/'native/image3d/comfy_nodes'],port=8189,gpu=True,
+                      extra_env={'PYTORCH_MPS_HIGH_WATERMARK_RATIO':'1.0',
+                                 'PYTORCH_MPS_LOW_WATERMARK_RATIO':'0.65'})
             if args.case in ['projection','texture','full']:
                 if args.case=='projection':
                     if not args.blend:p.error('投射探针需要 --blend')

@@ -48,7 +48,7 @@ python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probe
 python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/environment-01 --case environment
 python3 scripts/image3d/health.py --runtime data/image3d-runtime --verify
 python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/shape-01 --case shape --image /absolute/path/transparent.png
-python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/full-01 --case full --image /absolute/path/transparent.png
+python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probes/full-01 --case full --image /absolute/path/transparent.png --atlas 2048 --memory-limit-gib 12
 ```
 
 其他探针：`workflow` 生成真实 StableGen 工作流；`prepare --glb ...`
@@ -69,7 +69,7 @@ python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probe
 - 默认禁止联网。纹理任务只允许专属本机 ComfyUI 端口，且关闭其 API 节点。
 - 本工具自身的推理任务使用进程锁串行；尚未与正式工作台的视频队列整合。
 - 30 分钟预算从取得推理锁开始，包含各推理阶段；排队、安装和权重校验不计入。
-- 针对当前 16 GiB Mac，进程组占用采样超过 11 GiB 时停止该阶段并保留候选；该保护不等于整机不会发生内存压力。
+- 针对当前 16 GiB Mac，进程组占用采样超过 11 GiB 时停止该阶段并保留候选；可用 `--memory-limit-gib 12` 复现已通过的单视角纹理试验。该保护不等于整机不会发生内存压力，实测存在交换内存活动。
 - 取消及超时终止专属进程组；独立守护进程在主后台崩溃时终止孤立推理。失败只保留任务产物，不写入作品版本。
 - 网页验证服务只公开输入图、导出的 GLB 和 Three.js 文件，不公开任务日志。
 
@@ -103,3 +103,9 @@ python3 scripts/image3d/cancel_probe.py --runtime data/image3d-runtime --job dat
 ```sh
 "/Applications/Blender 4.5 LTS.app/Contents/MacOS/Blender" --background --factory-startup --disable-autoexec --threads 4 --python-exit-code 1 --python tests/blender/material_roundtrip.py -- "$PWD" "$PWD/data/probes/material-01"
 ```
+
+## M2 顺序加载适配
+
+`native/image3d/comfy_nodes` 仅供专属 ComfyUI 实例使用，依次执行参考编码、UNet/IPAdapter/深度推理和 CPU VAE 解码。运行采用分块注意力，MPS high/low watermark 为 1.0/0.65。固定 Lightning 权重仅包含 UNet LoRA；使用固定 ComfyUI 的实验性 model-only bypass 节点，因此升级上游前必须重跑完整验证。
+
+浏览器验证后执行 `python3 scripts/image3d/acceptance.py --job data/probes/full-01`，它核对完整阶段及当前 GLB 与浏览器记录的 SHA-256，产出技术兼容性记录；它不会把类别或照片还原质量自动判为通过。
