@@ -30,6 +30,8 @@ import { Inspector } from "./Inspector";
 import { Composer } from "./Composer";
 import { ProjectLibrary } from "./ProjectLibrary";
 import { ExportPanel } from "./ExportPanel";
+import { ImagePreparation } from "./ImagePreparation";
+import type { PreparedImage } from "./types";
 import {
   defaultRenderSettings,
   type RenderSettings,
@@ -38,7 +40,7 @@ import {
 } from "./types";
 import type { Project, Snapshot, Job, SceneCommand, Revision } from "./types";
 const terminal = (j: Job) =>
-  ["succeeded", "failed", "cancelled"].includes(j.status);
+  ["succeeded", "failed", "cancelled", "partial"].includes(j.status);
 const shortDate = (s: string) =>
   new Date(s).toLocaleString("zh-CN", {
     month: "2-digit",
@@ -65,6 +67,9 @@ export function App() {
     [view, setView] = useState("perspective"),
     [reloadKey, setReloadKey] = useState(0);
   const [chatExpanded, setChatExpanded] = useState(false);
+  const [preparation, setPreparation] = useState<PreparedImage | null>(null);
+  const [showCandidate, setShowCandidate] = useState(false);
+  const candidate = job?.candidateArtifactId ? job : snapshot?.candidates?.at(-1);
   const [showRender, setShowRender] = useState(false);
   const [settings, setSettings] = useState<RenderSettings>(
     defaultRenderSettings,
@@ -131,6 +136,8 @@ export function App() {
     setRenderView(false);
     setShowRender(false);
     setChatExpanded(false);
+    setPreparation(null);
+    setShowCandidate(false);
     setSettings(defaultRenderSettings);
     setReloadKey(0);
     void load(pid).catch((e) => setError(e.message));
@@ -153,15 +160,17 @@ export function App() {
     const receive = async (j: Job) => {
       if (disposed || currentPid.current !== p) return;
       setJob(j);
+      if (j.candidateArtifactId && j.type === "image3d") setShowCandidate(true);
       if (terminal(j) && !ending) {
         ending = true;
         setSubmitting(false);
         submitLock.current = false;
         if (j.type !== "discuss" && j.type !== "render")
           setReloadKey((k) => k + 1);
-        await load(p);
+        const fresh = await load(p);
+        if (j.preparedImageId) setPreparation(fresh?.preparedImages?.find(i => i.id === j.preparedImageId) || null);
         if (j.status === "succeeded") {
-          if (j.type !== "discuss")
+          if (j.type !== "discuss" && j.type !== "prepare-image")
             setNotice(
               j.type === "generate"
                 ? "建模已完成，详细结果保存在对话中。"
@@ -172,7 +181,8 @@ export function App() {
             setShowRender(true);
             setPanel("");
           }
-        } else setError(j.error || "任务已取消");
+        } else if (j.status === "partial") setNotice(j.message || j.error || "已保留部分完成的候选");
+        else setError(j.error || "任务已取消");
       }
     };
     const source = new EventSource(`/api/jobs/${jid}/events`);
@@ -198,7 +208,7 @@ export function App() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (document.querySelector(".project-library")) return;
+      if (document.querySelector(".project-library,.image-preparation")) return;
       if (
         target.closest("input,textarea,select,[contenteditable=true]") ||
         busy
@@ -268,6 +278,12 @@ export function App() {
     );
   }
   async function buildProposal(proposal: Proposal) {
+    if (proposal.route === "image3d" && proposal.primaryAttachmentId) {
+      const prepared = snapshot?.preparedImages?.filter(v => v.attachmentId === proposal.primaryAttachmentId).at(-1);
+      if (prepared) { setPreparation(prepared); return; }
+      await startJob("images/prepare", { attachmentId: proposal.primaryAttachmentId, baseRevisionId: base });
+      return;
+    }
     await startJob("generate", { proposalId: proposal.id });
   }
   async function command(c: Partial<SceneCommand>, id = selected) {
@@ -413,14 +429,15 @@ export function App() {
             key={pid}
             ref={viewport}
             url={
-              snapshot.previewUrl
+              showCandidate && candidate?.candidateArtifactId ? `/api/artifacts/${candidate.candidateArtifactId}` : snapshot.previewUrl
                 ? snapshot.previewUrl + "?reload=" + reloadKey
                 : null
             }
-            scene={snapshot.scene}
-            selected={selected}
-            readOnly={renderView}
+            scene={showCandidate ? candidate?.candidateManifest || { ...snapshot.scene, objects: [] } : snapshot.scene}
+            selected={showCandidate ? null : selected}
+            readOnly={renderView || showCandidate}
             onCameraChange={onCameraChange}
+            onReady={() => { if (showCandidate) viewport.current?.fit(); }}
             frameAspect={renderView ? frameAspect : undefined}
             onSelect={setSelected}
             mode={mode}
@@ -432,6 +449,14 @@ export function App() {
           />
         )}
       </main>
+      {candidate?.candidateArtifactId && <div className="candidate-banner glass">
+        <span>{showCandidate ? "候选预览 · 原作品保持不变" : "已有生成候选"}</span>
+        <button onClick={() => setShowCandidate(v => !v)}>{showCandidate ? "查看原作品" : "查看候选"}</button>
+      </div>}
+      {preparation && <ImagePreparation key={preparation.id} image={preparation} onClose={() => setPreparation(null)}
+        onSaved={image => { setPreparation(image); void load(pid); }}
+        onGenerate={async (image, text) => { if (await startJob("generate", { route: "image3d", preparedImageId: image.id,
+          prompt: text, baseRevisionId: base, objectId: null })) setPreparation(null); }} />}
       {renderView && base && (
         <div className="preview-label glass">
           实时材质预览 · 拖动旋转
@@ -508,7 +533,7 @@ export function App() {
           预览
         </button>
       </div>
-      {!base && !busy && snapshot && (
+      {!base && !busy && snapshot && !showCandidate && (
         <div className="empty-state">
           <div className="empty-cube">
             <Box strokeWidth={0.8} size={66} />
@@ -600,6 +625,7 @@ export function App() {
           onExpanded={setChatExpanded}
           onDiscuss={discuss}
           onBuild={(p) => void buildProposal(p)}
+          onPrepare={id => { void startJob("images/prepare", { attachmentId: id, baseRevisionId: base }); }}
           onStop={() => {
             if (job)
               void api(`/jobs/${job.id}/cancel`, {}).catch((e) =>
@@ -834,6 +860,12 @@ export function App() {
                           ? "越界读取、写入和网络均已实测阻止"
                           : health.sandbox?.error || "检查中",
                       ],
+                      ["本地形体引擎", health.image3d?.shape?.installationReady,
+                        health.image3d?.shape?.installationReady ? "shape-small 已安装；运行前完整校验权重" : "缺少形体引擎或权重"],
+                      ["本地纹理引擎", health.image3d?.texture?.installationReady,
+                        health.image3d?.texture?.installationReady ? "SDXL、Depth、IPAdapter、Lightning 已安装" : "缺少纹理引擎或权重"],
+                      ["图生建模工作空间", health.image3d?.disk?.hasWorkReserve,
+                        health.image3d?.disk ? `可用 ${(health.image3d.disk.freeBytes / 1024 ** 3).toFixed(1)} GiB；保留至少 10 GiB` : health.image3d?.error || "未检查"],
                     ].map(([name, ok, detail]) => (
                       <div key={String(name)}>
                         {ok ? (

@@ -47,6 +47,8 @@ import {
   collectUnusedImages,
 } from "./attachments";
 import { projectLibrary, trashProject, purgeProject } from "./projects";
+import { savePreparedMask } from "./image3d";
+import type { PreparedImage } from "../src/types";
 const app = Fastify({ logger: false, bodyLimit: 256 * 1024 });
 await app.register(cookie);
 const session = randomBytes(32).toString("hex");
@@ -145,6 +147,17 @@ app.delete<{ Params: { id: string; aid: string } }>(
     return { deleted: true };
   },
 );
+app.post<{ Params: { id: string } }>("/api/projects/:id/images/prepare", async (req, reply) => {
+  const b = z.object({ attachmentId: z.string().uuid(), baseRevisionId: z.string().uuid().nullable() }).parse(req.body);
+  return reply.code(202).send(enqueue(req.params.id, b.baseRevisionId, "prepare-image", b));
+});
+app.post<{ Params: { id: string; preparedId: string } }>("/api/projects/:id/images/:preparedId/mask",
+  { bodyLimit: 8 * 1024 * 1024 }, async (req) => {
+    const b = z.object({ mask: z.string().max(8 * 1024 * 1024), crop: z.object({ left: z.number().int().min(0),
+      top: z.number().int().min(0), width: z.number().int().min(1), height: z.number().int().min(1) }).optional() }).parse(req.body);
+    if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(b.mask)) throw new Error("需要 PNG 蒙版");
+    return savePreparedMask(req.params.id, req.params.preparedId, Buffer.from(b.mask.split(",")[1], "base64"), b.crop);
+  });
 app.post<{ Params: { id: string } }>("/api/projects/:id/trash", async (req) =>
   trashProject(req.params.id),
 );
@@ -216,6 +229,8 @@ app.get<{ Params: { id: string } }>(
       render: latestRender(p.id),
       messages: list<any>("message", p.id),
       proposals: list<Proposal>("proposal", p.id),
+      preparedImages: list("prepared-image", p.id),
+      candidates: list<Job>("job", p.id).filter(j => !!j.candidateArtifactId),
     };
   },
 );
@@ -229,6 +244,8 @@ app.post<{ Params: { id: string } }>(
           baseRevisionId: z.string().uuid().nullable(),
           prompt: z.string().trim().min(1).max(10000),
           objectId: z.string().uuid().nullable().optional(),
+          route: z.enum(["script", "image3d"]).default("script"),
+          preparedImageId: z.string().uuid().optional(),
         }),
       ])
       .parse(req.body);
@@ -244,19 +261,24 @@ app.post<{ Params: { id: string } }>(
           .code(409)
           .send({ error: "方案已过期，请继续讨论以更新方案" });
       validateAttachments(req.params.id, proposal.attachmentIds);
-      const j = enqueue(req.params.id, proposal.baseRevisionId, "generate", {
+      const prepared = proposal.route === "image3d" ? list<PreparedImage>("prepared-image", req.params.id)
+        .filter(v => v.attachmentId === proposal.primaryAttachmentId && v.status === "ready").at(-1) : undefined;
+      if (proposal.route === "image3d" && !prepared) throw new Error("请先准备并确认方案主图的主体");
+      const j = enqueue(req.params.id, proposal.baseRevisionId, proposal.route === "image3d" ? "image3d" : "generate", {
         baseRevisionId: proposal.baseRevisionId,
         prompt: proposal.description,
         objectId: proposal.objectId,
         attachmentIds: proposal.attachmentIds,
         proposalId: proposal.id,
+        preparedImageId: prepared?.id,
       });
       put("proposal", { ...proposal, jobId: j.id, status: "running" });
       return reply.code(202).send(j);
     }
+    if (input.route === "image3d" && !input.preparedImageId) throw new Error("请先准备并确认主体图片");
     return reply
       .code(202)
-      .send(enqueue(req.params.id, input.baseRevisionId, "generate", input));
+      .send(enqueue(req.params.id, input.baseRevisionId, input.route === "image3d" ? "image3d" : "generate", input));
   },
 );
 app.post<{ Params: { id: string } }>(
@@ -338,7 +360,7 @@ app.get<{ Params: { id: string } }>(
     const send = (v: Job) => {
       if (!closed) {
         reply.raw.write(`id: ${v.updatedAt}\ndata: ${JSON.stringify(v)}\n\n`);
-        if (["succeeded", "failed", "cancelled"].includes(v.status))
+        if (["succeeded", "failed", "cancelled", "partial"].includes(v.status))
           reply.raw.end();
       }
     };

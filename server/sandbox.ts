@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { BLENDER, ROOT, DATA } from "./config";
 import { runProcess } from "./process";
+import { IMAGE3D_RUNTIME, imagePython } from "./image3d";
 export function sandboxProfile(jobDir: string, rendering = false) {
   const cachePaths: string[] = [];
   if (rendering) {
@@ -70,8 +71,10 @@ export function runBlender(
     const tmp = path.join(jobDir, "tmp");
     fs.mkdirSync(tmp, { recursive: true });
     return runProcess(
-      "/usr/bin/sandbox-exec",
+      imagePython(),
       [
+        path.join(ROOT, "scripts/image3d/resource_exec.py"),
+        "--runtime", IMAGE3D_RUNTIME, "--", "/usr/bin/sandbox-exec",
         "-f",
         profile,
         BLENDER,
@@ -87,6 +90,7 @@ export function runBlender(
       {
         cwd: jobDir,
         timeout,
+        startTimeoutOnOutput: "FORMA_RESOURCE_ACQUIRED",
         signal,
         registryDir: path.join(DATA, "runtime-processes"),
         env: {

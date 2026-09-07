@@ -124,6 +124,8 @@ export function Inspector({
           )}
           {tab === "material" && mesh && (
             <div className="appearance">
+              <p className="field-note">有贴图时，基础颜色作为颜色系数保留原花纹。</p>
+              <button type="button" onClick={() => onCommand({ operation: "material", material: m, replaceTexture: true })}>替换为纯色</button>
               <label>
                 基础颜色
                 <input

@@ -11,6 +11,8 @@ export function runProcess(
     timeout?: number;
     signal?: AbortSignal;
     registryDir?: string;
+    startTimeoutOnOutput?: string;
+    gracefulAbortMs?: number;
   } = {},
 ) {
   return new Promise<{ stdout: string; stderr: string; code: number }>(
@@ -26,6 +28,7 @@ export function runProcess(
         stderr = "",
         timeout = false;
       let record: string | undefined;
+      let abortTimer: ReturnType<typeof setTimeout> | undefined;
       if (options.registryDir && p.pid) {
         fs.mkdirSync(options.registryDir, { recursive: true });
         record = path.join(options.registryDir, randomUUID() + ".json");
@@ -50,18 +53,27 @@ export function runProcess(
           p.kill("SIGKILL");
         }
       };
-      const timer = setTimeout(() => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const startTimer = () => { timer = setTimeout(() => {
         timeout = true;
         kill();
-      }, options.timeout || 15000);
-      options.signal?.addEventListener("abort", kill, { once: true });
+      }, options.timeout || 15000); };
+      if (!options.startTimeoutOnOutput) startTimer();
+      const abort = () => {
+        if (!options.gracefulAbortMs) return kill();
+        p.kill("SIGTERM");
+        abortTimer = setTimeout(kill, options.gracefulAbortMs);
+      };
+      options.signal?.addEventListener("abort", abort, { once: true });
       const cleanup = () => {
         clearTimeout(timer);
-        options.signal?.removeEventListener("abort", kill);
+        clearTimeout(abortTimer);
+        options.signal?.removeEventListener("abort", abort);
         if (record) fs.rmSync(record, { force: true });
       };
       p.stdout.on("data", (b) => {
         stdout = (stdout + b.toString()).slice(-300000);
+        if (options.startTimeoutOnOutput && !timer && stdout.includes(options.startTimeoutOnOutput)) startTimer();
       });
       p.stderr.on("data", (b) => {
         stderr = (stderr + b.toString()).slice(-100000);

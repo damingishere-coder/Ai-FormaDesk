@@ -5,6 +5,7 @@ import { BLENDER, DATA, ROOT } from "./config";
 import { runProcess } from "./process";
 import { runBlender } from "./sandbox";
 import { codex } from "./codex";
+import { imageEnvironment } from "./image3d";
 export let environment: any = {
   ok: false,
   checking: true,
@@ -21,6 +22,7 @@ export async function checkEnvironment() {
 async function perform() {
   environment = { ...environment, checking: true };
   const ai = await codex.health();
+  const image3d = await imageEnvironment();
   let blender: any = {
       ok: false,
       path: BLENDER,
@@ -104,6 +106,7 @@ async function perform() {
     codex: ai,
     blender,
     sandbox,
+    image3d,
   };
   return environment;
 }

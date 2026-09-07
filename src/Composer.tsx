@@ -48,6 +48,7 @@ export function Composer({
   onExpanded,
   onDiscuss,
   onBuild,
+  onPrepare,
   onStop,
   onHealth,
   onError,
@@ -63,6 +64,7 @@ export function Composer({
   onExpanded: (v: boolean) => void;
   onDiscuss: (text: string, ids: string[]) => Promise<boolean>;
   onBuild: (p: Proposal) => void;
+  onPrepare: (id: string) => void;
   onStop: () => void;
   onHealth: () => void;
   onError: (e: string) => void;
@@ -457,6 +459,7 @@ export function Composer({
                     <img src={a.url} alt={`待发送图 ${i + 1}`} />
                   </button>
                   <span>图 {i + 1}</span>
+                  {a.id && <button className="prepare-image-action" type="button" disabled={busy} onClick={() => onPrepare(a.id!)}>准备主体</button>}
                   <button
                     type="button"
                     className="remove-image"

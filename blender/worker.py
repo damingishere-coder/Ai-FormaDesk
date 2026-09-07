@@ -90,7 +90,7 @@ def manifest():
                     verts+=len(mesh.vertices);mesh.calc_loop_triangles();tris+=len(mesh.loop_triangles)
             finally:evaluated.to_mesh_clear()
             if verts>2000000:raise ValueError('V1 场景应用修改器后超过 200 万顶点上限')
-        objects.append({'id':identity(obj),'name':obj.name,'type':obj.type,'parentId':identity(obj.parent) if obj.parent else None,'transform':{'position':list(obj.location),'rotation':list(obj.rotation_euler),'scale':list(obj.scale)},'matrix':[obj.matrix_local[r][c] for c in range(4) for r in range(4)],'visible':not obj.hide_render,'material':material(obj),'light':{'type':obj.data.type,'color':color_hex(obj.data.color),'energy':obj.data.energy} if obj.type=='LIGHT' else None})
+        objects.append({'id':identity(obj),'name':obj.name,'type':obj.type,'parentId':identity(obj.parent) if obj.parent else None,**({'subjectId':obj['forma_subject_id']} if obj.get('forma_subject_id') else {}),'transform':{'position':list(obj.location),'rotation':list(obj.rotation_euler),'scale':list(obj.scale)},'matrix':[obj.matrix_local[r][c] for c in range(4) for r in range(4)],'visible':not obj.hide_render,'material':material(obj),'light':{'type':obj.data.type,'color':color_hex(obj.data.color),'energy':obj.data.energy} if obj.type=='LIGHT' else None})
     if verts>2000000:raise ValueError('V1 场景超过 200 万顶点上限')
     return {'objects':objects,'stats':{'objects':len(objects),'vertices':verts,'triangles':tris},'units':'meters','coordinates':'blender-z-up'}
 if mode=='execute':
@@ -99,6 +99,29 @@ if mode=='execute':
         bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False)
     with open(file('generated.py'),encoding='utf8') as f:code=compile(f.read(),'generated.py','exec')
     exec(code,{'bpy':bpy,'__name__':'__main__'})
+    bpy.ops.wm.save_as_mainfile(filepath=file('raw.blend'),check_existing=False)
+elif mode=='image3d':
+    if os.path.exists(file('base.blend')):open_scene('base.blend')
+    else:
+        bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False)
+    request=read('command.json')
+    root_id=str(uuid.uuid4());root_matrix=Matrix.Identity(4);root_parent=None
+    if request.get('objectId'):
+        selected=find(request['objectId']);root_id=selected.get('forma_subject_id') or identity(selected)
+        old=find(root_id);root_matrix=old.matrix_world.copy();root_parent=old.parent
+        for obj in reversed(descendants(old)):bpy.data.objects.remove(obj,do_unlink=True)
+    root=bpy.data.objects.new(request.get('name','照片主体')[:120],None)
+    root['forma_id']=root_id;root['forma_subject_id']=root_id;root['forma_scale_estimated']=True
+    bpy.context.scene.collection.objects.link(root);root.parent=root_parent;root.matrix_world=root_matrix
+    with bpy.data.libraries.load(file('subject.blend'),link=False) as (source,target):
+        target.objects=source.objects
+    count=0
+    for obj in target.objects:
+        if obj and obj.type=='MESH':
+            local=obj.matrix_basis.copy();obj.parent=None
+            bpy.context.scene.collection.objects.link(obj);obj.parent=root;obj.matrix_basis=local
+            obj['forma_id']=str(uuid.uuid4());obj['forma_subject_id']=root_id;count+=1
+    if not count:raise ValueError('候选文件没有主体网格')
     bpy.ops.wm.save_as_mainfile(filepath=file('raw.blend'),check_existing=False)
 elif mode=='command':
     open_scene('base.blend');c=read('command.json');obj=find(c['objectId']);op=c['operation']
@@ -134,12 +157,31 @@ elif mode=='command':
             cp['forma_id']=str(uuid.uuid4());bpy.context.collection.objects.link(cp);pairs[o]=cp
         for o,cp in pairs.items():
             if o.parent in pairs:cp.parent=pairs[o.parent]
+            if o.get('forma_subject_id'):
+                source_root=next((n for n in pairs if identity(n)==o['forma_subject_id']),None)
+                cp['forma_subject_id']=identity(pairs[source_root]) if source_root else identity(cp)
         pairs[obj].location.x+=.25
     bpy.ops.wm.save_as_mainfile(filepath=file('raw.blend'),check_existing=False)
 elif mode=='validate':
     open_scene('raw.blend');normalize();m=manifest()
     bpy.context.preferences.filepaths.save_version=0
     bpy.ops.wm.save_as_mainfile(filepath=file('scene.blend'),check_existing=False)
+    # The editable master keeps original geometry; only photo-subject previews
+    # receive decimation. Re-evaluate every subject after applying modifiers.
+    groups={}
+    for obj in bpy.context.scene.objects:
+        if obj.type=='MESH' and obj.get('forma_subject_id'):
+            groups.setdefault(obj['forma_subject_id'],[]).append(obj)
+    deps=bpy.context.evaluated_depsgraph_get()
+    for objects in groups.values():
+        total=0
+        for obj in objects:
+            evaluated=obj.evaluated_get(deps);mesh=evaluated.to_mesh()
+            try:mesh.calc_loop_triangles();total+=len(mesh.loop_triangles)
+            finally:evaluated.to_mesh_clear()
+        if total>150000:
+            for obj in objects:
+                modifier=obj.modifiers.new('网页预览简化','DECIMATE');modifier.ratio=145000/total
     # Let Blender's glTF exporter traverse supported image, factor and normal
     # chains. Pruning non-image links here also destroys valid texture factors.
     # Export hidden objects too; visibility is carried by the authoritative manifest.

@@ -1,6 +1,6 @@
 # 本地图生建模：阶段 A 验证工具
 
-这里是独立运行的兼容性验证代码，尚未接入正式作品、版本或网页编辑接口。
+这里包含独立兼容性验证工具及正在接入的工作台图生候选路线；正式多视角作品版本与局部精修仍未完成。
 只有真实的形体生成、AI 纹理推理、StableGen 投射烘焙及网页查看全部通过，
 才能进入完整工作台改造。单个探针通过不会把整条路线标记成功。
 
@@ -67,7 +67,7 @@ python3 scripts/image3d/probe.py --runtime data/image3d-runtime --job data/probe
 
 - 推理使用 macOS 沙箱，产物只写当前任务目录；源码、权重只读。GPU 任务额外允许系统 Metal 编译服务使用其专属编译缓存。
 - 默认禁止联网。纹理任务只允许专属本机 ComfyUI 端口，且关闭其 API 节点。
-- 本工具自身的推理任务使用进程锁串行；尚未与正式工作台的视频队列整合。
+- 推理与工作台 runBlender 使用同一文件锁串行；已有渲染及经 runBlender 调用的视频执行会共享此锁。本分支不包含主工作区尚未提交的视频改动。
 - 30 分钟预算从取得推理锁开始，包含各推理阶段；排队、安装和权重校验不计入。
 - 针对当前 16 GiB Mac，进程组占用采样超过 11 GiB 时停止该阶段并保留候选；可用 `--memory-limit-gib 12` 复现已通过的单视角纹理试验。该保护不等于整机不会发生内存压力，实测存在交换内存活动。
 - 取消及超时终止专属进程组；独立守护进程在主后台崩溃时终止孤立推理。失败只保留任务产物，不写入作品版本。
@@ -98,7 +98,7 @@ python3 scripts/image3d/cancel_probe.py --runtime data/image3d-runtime --job dat
 
 ## 现有材质流程回归
 
-`tests/blender/material_roundtrip.py` 使用真实 Blender 验证纹理改色、重复修改、法线与透明度连接、稳定 ID 和修改器统计。显式纯色替换目前仅在内部命令中验证，网页动作尚未接入。
+`tests/blender/material_roundtrip.py` 使用真实 Blender 验证纹理改色、重复修改、法线与透明度连接、稳定 ID 和修改器统计。网页外观面板已增加独立“替换为纯色”操作，普通改色仍保留贴图。
 
 ```sh
 "/Applications/Blender 4.5 LTS.app/Contents/MacOS/Blender" --background --factory-startup --disable-autoexec --threads 4 --python-exit-code 1 --python tests/blender/material_roundtrip.py -- "$PWD" "$PWD/data/probes/material-01"
@@ -109,3 +109,11 @@ python3 scripts/image3d/cancel_probe.py --runtime data/image3d-runtime --job dat
 `native/image3d/comfy_nodes` 仅供专属 ComfyUI 实例使用，依次执行参考编码、UNet/IPAdapter/深度推理和 CPU VAE 解码。运行采用分块注意力，MPS high/low watermark 为 1.0/0.65。固定 Lightning 权重仅包含 UNet LoRA；使用固定 ComfyUI 的实验性 model-only bypass 节点，因此升级上游前必须重跑完整验证。
 
 浏览器验证后执行 `python3 scripts/image3d/acceptance.py --job data/probes/full-01`，它核对完整阶段及当前 GLB 与浏览器记录的 SHA-256，产出技术兼容性记录；它不会把类别或照片还原质量自动判为通过。
+
+## 工作台候选路线
+
+可用 `FORMA_IMAGE3D_RUNTIME` 指定已安装的独立运行目录。环境检查分别展示形体、纹理与磁盘余量；运行前还会校验完整权重。上传或粘贴图片后点击“准备主体”，在蒙版画布确认主体后生成候选。旧方案缺少 `route` 时仍使用脚本路线。
+
+图片准备返回不可变处理图 ID；修补蒙版和裁切产生新记录。推理候选与当前作品版本分离，目前单视角结果返回 `partial`，多视角与照片一致性未通过前不自动创建正式版本。可旋转候选，刷新后可重新打开；失败与取消保留原作品。
+
+真实集成检查入口：`scripts/image3d/workbench_probe.ts`、`resource_probe.ts` 和 `app_probe.mjs`；都需要单独的数据/证据目录。完整实测结果及未完成项见 `LOCAL-REPORT.md`。

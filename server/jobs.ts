@@ -6,6 +6,7 @@ import { runBlender } from "./sandbox";
 import { assertExecution, environment } from "./environment";
 import { codex } from "./codex";
 import { attachmentPath, validateAttachments } from "./attachments";
+import { prepareImage, preparedImage, runImageProbe } from "./image3d";
 import {
   db,
   put,
@@ -112,7 +113,7 @@ function checkFiles(dir: string) {
 }
 export async function executeScene(
   dir: string,
-  mode: "execute" | "command",
+  mode: "execute" | "command" | "image3d",
   signal: AbortSignal,
   onStage: (s: string) => void,
 ) {
@@ -148,13 +149,20 @@ export function enqueue(
   type: string,
   payload: any,
 ) {
-  if (type !== "discuss") assertExecution();
+  if (!["discuss", "prepare-image"].includes(type)) assertExecution();
   const p = assertBase(pid, base);
-  if (["generate", "discuss"].includes(type) && !environment.codex.ok)
+  if (["generate", "discuss", "image3d"].includes(type) && !environment.codex.ok)
     throw Object.assign(
       new Error(environment.codex.error || "Codex 暂不可用，请检查登录和模型"),
       { statusCode: 503 },
     );
+  if (type === "prepare-image") validateAttachments(pid, [payload.attachmentId]);
+  if (type === "image3d") {
+    const input = preparedImage(pid, payload.preparedImageId);
+    if (input.status !== "ready") throw new Error("请先选择并确认主体蒙版");
+    if (!environment.image3d?.shape?.installationReady || !environment.image3d?.texture?.installationReady)
+      throw new Error("形体或纹理引擎尚未安装，请查看环境检查");
+  }
   if (
     payload.objectId &&
     base &&
@@ -188,6 +196,10 @@ export function enqueue(
       payload.proposalId ? "执行方案：" + payload.prompt : payload.prompt,
       { jobId: j.id },
     );
+  if (type === "image3d") {
+    const input = preparedImage(pid, payload.preparedImageId);
+    addMessage(pid, "user", payload.prompt, { jobId: j.id, attachmentIds: [input.attachmentId] });
+  }
   if (type === "discuss") {
     invalidateProposals(pid);
     const images = validateAttachments(pid, payload.attachmentIds || []);
@@ -223,6 +235,7 @@ async function perform(
     if (signal.aborted) throw new Error("任务已取消");
     update(j, {
       status: "running",
+      startedAt: now(),
       stage:
         j.type === "generate"
           ? "生成脚本"
@@ -256,6 +269,8 @@ async function perform(
         const chosen = result.proposal.attachmentIds;
         if (chosen.some((id) => !imageIds.includes(id)))
           throw new Error("方案引用了本轮不可见的图片，请重新整理方案");
+        if (result.proposal.route === "image3d" && (!result.proposal.primaryAttachmentId || !chosen.includes(result.proposal.primaryAttachmentId)))
+          throw new Error("图生方案必须从引用图片中指定一张主图");
         proposalId = uid();
         put<Proposal>("proposal", {
           id: proposalId,
@@ -265,6 +280,8 @@ async function perform(
           title: result.proposal.title,
           description: result.proposal.description,
           attachmentIds: chosen,
+          route: result.proposal.route,
+          primaryAttachmentId: result.proposal.primaryAttachmentId,
           status: "ready",
           createdAt: now(),
         });
@@ -286,6 +303,15 @@ async function perform(
     fs.mkdirSync(root, { recursive: true });
     dir = path.join(root, "attempt-0");
     fs.mkdirSync(dir);
+    if (j.type === "prepare-image") {
+      update(j, { stage: "分离照片主体" });
+      const prepared = await prepareImage(p.id, payload.attachmentId, path.join(dir, "foreground-job"), signal,
+        report => update(j, { stage: report.status === "queued" ? "等待本机计算资源" : "分离照片主体" }));
+      if (signal.aborted) throw new Error("任务已取消");
+      update(j, { status: "succeeded", stage: "图片准备完成", preparedImageId: prepared.id,
+        message: prepared.status === "ready" ? "已分离主体，可检查或修补蒙版" : "请选择并修补主体蒙版" });
+      return;
+    }
     if (j.baseRevisionId)
       fs.copyFileSync(
         artifactPath(revision(j.baseRevisionId).artifacts.blend),
@@ -345,7 +371,42 @@ async function perform(
     let scene;
     let script = "";
     let summary = "";
-    if (j.type === "generate") {
+    let imageProvenance: Record<string, unknown> | undefined;
+    if (j.type === "image3d") {
+      const input = preparedImage(p.id, payload.preparedImageId);
+      const probeDir = path.join(dir, "inference");
+      update(j, { stage: "分析主体比例、结构与颜色" });
+      const analysis = await codex.analyzeImage(p.id, payload.prompt, signal,
+        [attachmentPath(p.id, input.attachmentId), attachmentPath(p.id, input.imageId)]);
+      update(j, { stage: "校验本地权重" });
+      const report = await runImageProbe(probeDir, ["--case", "full", "--image", attachmentPath(p.id, input.imageId),
+        "--atlas", "2048", "--memory-limit-gib", "12", "--prompt", analysis.texturePrompt], signal, report => {
+        const phase = report.stages?.at(-1)?.stage;
+        const stage = report.status === "queued" ? "等待本机计算资源" : ({ shape: "生成形体", prepare: "检查形体与准备预览",
+          workflow: "准备纹理", texture: "生成表面纹理", projection: "烘焙与导出纹理" } as Record<string, string>)[phase] || "校验产物";
+        const values: Partial<Job> = { stage };
+        if (report.shapePreview && !j.candidateArtifactId)
+          values.candidateArtifactId = artifact(path.join(probeDir, "shape-preview.glb"), p.id, "形体候选.glb", "model/gltf-binary");
+        update(j, values);
+      });
+      fs.copyFileSync(path.join(probeDir, "textured.blend"), path.join(dir, "subject.blend"));
+      fs.writeFileSync(path.join(dir, "command.json"), JSON.stringify({ objectId: payload.objectId, name: payload.prompt.slice(0, 60) }));
+      script = fs.readFileSync(path.join(ROOT, "blender/worker.py"), "utf8");
+      fs.writeFileSync(path.join(dir, "generated.py"), script);
+      scene = await executeScene(dir, "image3d", signal, stage => update(j, { stage }));
+      imageProvenance = { route: "image3d", preparedImageId: input.id, primaryAttachmentId: input.attachmentId,
+        scaleEstimated: true, longestSideMeters: 1, textureViews: 1, visualAcceptance: "pending", analysis, report };
+      // The single-view integration remains a candidate until the multi-view
+      // and photo consistency stages are implemented and validated.
+      update(j, { status: "partial", stage: "部分完成", candidateArtifactId: artifact(path.join(dir, "scene.glb"), p.id,
+        "已上色候选.glb", "model/gltf-binary"), candidateManifest: scene,
+        message: "已生成可编辑候选；多视角补色与照片一致性检查尚未完成，原版本保留。" });
+      put("image3d-candidate", { id: j.id, projectId: p.id, baseRevisionId: j.baseRevisionId,
+        directory: dir, provenance: imageProvenance, createdAt: now() });
+      if (payload.proposalId) put("proposal", { ...get<Proposal>("proposal", payload.proposalId)!, status: "failed" });
+      addMessage(p.id, "assistant", j.message, { jobId: j.id });
+      return;
+    } else if (j.type === "generate") {
       let context = `用户指令：${payload.prompt}\n当前版本：${j.baseRevisionId || "空白场景"}\n选中对象 ID：${payload.objectId || "无"}\n参考图片（按顺序）：${JSON.stringify(payload.attachmentIds || [])}\n最新场景：${JSON.stringify(j.baseRevisionId ? revision(j.baseRevisionId).scene : { objects: [] })}`;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (signal.aborted) throw new Error("任务已取消");
@@ -461,8 +522,8 @@ async function perform(
     })();
   } catch (e) {
     update(j, {
-      status: signal.aborted ? "cancelled" : "failed",
-      stage: signal.aborted ? "已取消" : "失败",
+      status: signal.aborted ? "cancelled" : j.candidateArtifactId ? "partial" : "failed",
+      stage: signal.aborted ? "已取消" : j.candidateArtifactId ? "部分完成" : "失败",
       error: (e as Error).message || "执行失败",
     });
     if (j.type === "generate")

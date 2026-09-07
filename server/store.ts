@@ -95,8 +95,8 @@ export function recoverInterrupted() {
     if (["queued", "running"].includes(j.status))
       put("job", {
         ...j,
-        status: "failed",
-        stage: "执行中断",
+        status: j.candidateArtifactId ? "partial" : "failed",
+        stage: j.candidateArtifactId ? "部分完成 · 执行中断" : "执行中断",
         error: "后台已重新启动，未完成的任务已终止。已保存版本不受影响。",
         updatedAt: now(),
       } as Job);

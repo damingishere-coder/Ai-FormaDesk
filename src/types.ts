@@ -28,6 +28,7 @@ export const objectSchema = z.object({
     "META",
   ]),
   parentId: z.string().uuid().nullable(),
+  subjectId: z.string().uuid().optional(),
   transform: transformSchema,
   matrix: z.array(z.number().finite()).length(16),
   visible: z.boolean(),
@@ -74,6 +75,7 @@ export const commandSchema = z
     ]),
     transform: transformSchema.optional(),
     material: materialSchema.optional(),
+    replaceTexture: z.boolean().optional(),
     light: z
       .object({
         color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
@@ -142,6 +144,7 @@ export type Revision = {
   label: string;
   createdAt: string;
   scene: Scene;
+  image3d?: Record<string, unknown>;
   artifacts: {
     blend: string;
     glb: string;
@@ -155,7 +158,7 @@ export type Job = {
   projectId: string;
   baseRevisionId: string | null;
   type: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "partial";
   stage: string;
   error: string | null;
   resultRevisionId: string | null;
@@ -163,6 +166,10 @@ export type Job = {
   updatedAt: string;
   message: string;
   renderArtifactId?: string;
+  preparedImageId?: string;
+  candidateArtifactId?: string;
+  candidateManifest?: Scene;
+  startedAt?: string;
   events?: { stage: string; at: string }[];
 };
 export type Render = {
@@ -203,6 +210,8 @@ export type Proposal = {
   title: string;
   description: string;
   attachmentIds: string[];
+  route?: "script" | "image3d";
+  primaryAttachmentId?: string | null;
   status: "ready" | "stale" | "running" | "succeeded" | "failed";
   jobId?: string;
   createdAt: string;
@@ -227,4 +236,21 @@ export type Snapshot = {
   render: Render | null;
   messages: Message[];
   proposals: Proposal[];
+  preparedImages?: PreparedImage[];
+  candidates?: Job[];
+};
+
+export type PreparedImage = {
+  id: string;
+  projectId: string;
+  attachmentId: string;
+  sourceId: string;
+  imageId: string;
+  maskId: string;
+  width: number;
+  height: number;
+  variants: { imageId: string; maskId: string }[];
+  status: "ready" | "needs-selection";
+  warning?: string;
+  createdAt: string;
 };
