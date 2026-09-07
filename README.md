@@ -4,6 +4,10 @@
 
 ## 启动
 
+本机可直接点击程序坞的 **Ai-FormaDesk** 绿色立方体图标。应用安装在 `~/Applications/Ai-FormaDesk.app`，调用本项目的启动脚本；项目文件夹需要保留在原位置。服务已运行时会直接打开网页。应用启动后退出属于正常现象，服务由终端窗口保持运行。
+
+如需重建图标或项目移动后更新入口，在项目目录执行 `/usr/bin/python3 scripts/install-mac-app.py`。安装器使用 macOS 自带的 AppleScript、Swift/AppKit 和 iconutil，需要本机 Xcode 命令行工具；保留其他程序坞图标，旧入口与程序坞配置备份到 `data/launcher-backups`。
+
 本机已准备依赖时，双击 **`启动 Ai-FormaDesk.command`**。保留打开的终端窗口；按 `Control+C` 停止工作台。入口不会更新 Codex、修改登录或切换模型提供商。
 
 访问 **http://127.0.0.1:8765**。
