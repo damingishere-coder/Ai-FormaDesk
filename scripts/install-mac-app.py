@@ -42,11 +42,15 @@ def install():
         icons.mkdir()
         run("/usr/bin/swift", str(ROOT / "scripts/create-app-icon.swift"), str(icons))
         run("/usr/bin/iconutil", "-c", "icns", str(icons), "-o",
-            str(staged / "Contents/Resources/applet.icns"))
+            str(staged / "Contents/Resources/FormaDesk.icns"))
         info_path = staged / "Contents/Info.plist"
         info = plistlib.loads(info_path.read_bytes())
+        # osacompile supplies an asset catalog which takes precedence over ICNS.
+        # Remove its icon-name reference and explicitly use our own resource.
+        info.pop("CFBundleIconName", None)
         info.update(CFBundleIdentifier=BUNDLE_ID, CFBundleName="Ai-FormaDesk",
-                    CFBundleDisplayName="Ai-FormaDesk", CFBundleShortVersionString="1.0",
+                    CFBundleDisplayName="Ai-FormaDesk", CFBundleShortVersionString="1.0.1",
+                    CFBundleVersion="2", CFBundleIconFile="FormaDesk.icns",
                     NSHighResolutionCapable=True)
         info_path.write_bytes(plistlib.dumps(info))
         run("/usr/bin/codesign", "--force", "--sign", "-", str(staged))
@@ -61,19 +65,31 @@ def install():
     dock_data = run("/usr/bin/defaults", "export", "com.apple.dock", "-")
     dock = plistlib.loads(dock_data)
     url = APP.as_uri() + "/"
-    existing = [tile.get("tile-data", {}).get("file-data", {}).get("_CFURLString", "")
-                for tile in dock.get("persistent-apps", [])]
-    if url.rstrip("/") not in [item.rstrip("/") for item in existing]:
-        backup = ROOT / "data/launcher-backups"
-        backup.mkdir(parents=True, exist_ok=True)
-        (backup / (datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-dock.plist")).write_bytes(dock_data)
-        tile = {"tile-type": "file-tile", "tile-data": {
-            "file-data": {"_CFURLString": url, "_CFURLStringType": 15},
-            "file-label": "Ai-FormaDesk", "bundle-identifier": BUNDLE_ID,
-            "file-type": 41}}
-        run("/usr/bin/defaults", "write", "com.apple.dock", "persistent-apps", "-array-add",
-            plistlib.dumps(tile).decode())
-        subprocess.run(["/usr/bin/killall", "Dock"], check=False, capture_output=True)
+    backup = ROOT / "data/launcher-backups"
+    backup.mkdir(parents=True, exist_ok=True)
+    (backup / (datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f") + "-dock.plist")).write_bytes(dock_data)
+    tile = {"tile-type": "file-tile", "tile-data": {
+        "file-data": {"_CFURLString": url, "_CFURLStringType": 15},
+        "file-label": "Ai-FormaDesk", "bundle-identifier": BUNDLE_ID,
+        "file-type": 41}}
+    tiles = []
+    inserted = False
+    for existing in dock.get("persistent-apps", []):
+        details = existing.get("tile-data", {})
+        same_app = (details.get("bundle-identifier") == BUNDLE_ID or
+                    details.get("file-data", {}).get("_CFURLString", "").rstrip("/") == url.rstrip("/"))
+        if same_app:
+            # Rebind this tile: an old bookmark may follow the backed-up app.
+            if not inserted:
+                tiles.append(tile)
+                inserted = True
+        else:
+            tiles.append(existing)
+    if not inserted:
+        tiles.append(tile)
+    run("/usr/bin/defaults", "write", "com.apple.dock", "persistent-apps", "-array",
+        *(plistlib.dumps(entry).decode() for entry in tiles))
+    subprocess.run(["/usr/bin/killall", "Dock"], check=False, capture_output=True)
     print(f"已安装并保留在程序坞：{APP}")
 
 
