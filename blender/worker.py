@@ -25,9 +25,35 @@ def mat_node(mat):
     if not mat:return None
     mat.use_nodes=True
     return next((n for n in mat.node_tree.nodes if n.type=='BSDF_PRINCIPLED'),None)
+def material_factor(socket):
+    if not socket.is_linked:return socket.default_value
+    node=socket.links[0].from_node
+    if node.get('forma_factor')==socket.name:
+        return node.inputs[7 if socket.type=='RGBA' else 1].default_value
+    return (1,1,1,1) if socket.type=='RGBA' else 1.0
+def set_material_factor(mat,socket,value,replace=False):
+    if replace:
+        for link in list(socket.links):mat.node_tree.links.remove(link)
+    if not socket.is_linked:
+        socket.default_value=value;return
+    source=socket.links[0].from_socket
+    factor=source.node
+    if factor.get('forma_factor')!=socket.name:
+        if socket.type=='RGBA':
+            factor=mat.node_tree.nodes.new('ShaderNodeMix')
+            factor.data_type='RGBA';factor.blend_type='MULTIPLY';factor.inputs[0].default_value=1
+            mat.node_tree.links.new(source,factor.inputs[6])
+            output=factor.outputs[2]
+        else:
+            factor=mat.node_tree.nodes.new('ShaderNodeMath');factor.operation='MULTIPLY'
+            mat.node_tree.links.new(source,factor.inputs[0]);output=factor.outputs[0]
+        factor['forma_factor']=socket.name
+        factor.label='网页材质系数 / '+socket.name
+        mat.node_tree.links.new(output,socket)
+    factor.inputs[7 if socket.type=='RGBA' else 1].default_value=value
 def material(obj):
     n=mat_node(obj.active_material) if hasattr(obj,'active_material') else None
-    return None if not n else {'color':color_hex(n.inputs['Base Color'].default_value),'roughness':n.inputs['Roughness'].default_value,'metalness':n.inputs['Metallic'].default_value}
+    return None if not n else {'color':color_hex(material_factor(n.inputs['Base Color'])),'roughness':material_factor(n.inputs['Roughness']),'metalness':material_factor(n.inputs['Metallic'])}
 def find(oid):
     obj=next((o for o in bpy.context.scene.objects if o.get('forma_id')==oid),None)
     if obj is None:raise ValueError('对象 ID 不存在: '+oid)
@@ -55,9 +81,15 @@ def normalize():
     bpy.context.view_layer.update()
 def manifest():
     objects=[];verts=0;tris=0
+    depsgraph=bpy.context.evaluated_depsgraph_get()
     for obj in bpy.context.scene.objects:
-        if obj.type=='MESH':
-            verts+=len(obj.data.vertices);obj.data.calc_loop_triangles();tris+=len(obj.data.loop_triangles)
+        if obj.type in ('MESH','CURVE','FONT','SURFACE','META'):
+            evaluated=obj.evaluated_get(depsgraph);mesh=evaluated.to_mesh()
+            try:
+                if mesh:
+                    verts+=len(mesh.vertices);mesh.calc_loop_triangles();tris+=len(mesh.loop_triangles)
+            finally:evaluated.to_mesh_clear()
+            if verts>2000000:raise ValueError('V1 场景应用修改器后超过 200 万顶点上限')
         objects.append({'id':identity(obj),'name':obj.name,'type':obj.type,'parentId':identity(obj.parent) if obj.parent else None,'transform':{'position':list(obj.location),'rotation':list(obj.rotation_euler),'scale':list(obj.scale)},'matrix':[obj.matrix_local[r][c] for c in range(4) for r in range(4)],'visible':not obj.hide_render,'material':material(obj),'light':{'type':obj.data.type,'color':color_hex(obj.data.color),'energy':obj.data.energy} if obj.type=='LIGHT' else None})
     if verts>2000000:raise ValueError('V1 场景超过 200 万顶点上限')
     return {'objects':objects,'stats':{'objects':len(objects),'vertices':verts,'triangles':tris},'units':'meters','coordinates':'blender-z-up'}
@@ -80,9 +112,11 @@ elif mode=='command':
         if len(obj.data.materials):obj.data.materials[obj.active_material_index]=mat
         else:obj.data.materials.append(mat)
         n=mat_node(mat);v=c['material']
-        for prop in ['Base Color','Roughness','Metallic']:
-            for link in list(n.inputs[prop].links):mat.node_tree.links.remove(link)
-        n.inputs['Base Color'].default_value=(*color_rgb(v['color']),1);n.inputs['Roughness'].default_value=v['roughness'];n.inputs['Metallic'].default_value=v['metalness']
+        if not n:raise ValueError('此材质没有可编辑的 Principled BSDF')
+        alpha=n.inputs['Base Color'].default_value[3]
+        set_material_factor(mat,n.inputs['Base Color'],(*color_rgb(v['color']),alpha),c.get('replaceTexture',False))
+        set_material_factor(mat,n.inputs['Roughness'],v['roughness'])
+        set_material_factor(mat,n.inputs['Metallic'],v['metalness'])
     elif op=='light':
         if obj.type!='LIGHT':raise ValueError('此对象不是灯光')
         if obj.data.users>1:obj.data=obj.data.copy()
@@ -106,14 +140,8 @@ elif mode=='validate':
     open_scene('raw.blend');normalize();m=manifest()
     bpy.context.preferences.filepaths.save_version=0
     bpy.ops.wm.save_as_mainfile(filepath=file('scene.blend'),check_existing=False)
-    # GLB supports basic PBR; keep procedural nodes in the saved .blend,
-    # and use their explicit PBR fallback values in the web derivative.
-    for mat in bpy.data.materials:
-        n=mat_node(mat)
-        if n:
-            for prop in ['Base Color','Roughness','Metallic','Normal']:
-                for link in list(n.inputs[prop].links):
-                    if link.from_node.type not in ('TEX_IMAGE','NORMAL_MAP'):mat.node_tree.links.remove(link)
+    # Let Blender's glTF exporter traverse supported image, factor and normal
+    # chains. Pruning non-image links here also destroys valid texture factors.
     # Export hidden objects too; visibility is carried by the authoritative manifest.
     hidden=[(o,o.hide_viewport,o.hide_render,o.hide_get()) for o in bpy.context.scene.objects]
     for o,_,_,_ in hidden:o.hide_viewport=False;o.hide_render=False;o.hide_set(False)
