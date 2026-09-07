@@ -5,12 +5,17 @@ import type { Snapshot, Job } from "../../src/types";
 const evidence = path.resolve("data/acceptance");
 test("已保存真实场景的渲染、导出、失效提示与变换控件", async ({ page }) => {
   await page.goto("/");
-  await page.locator(".project-trigger").click();
+  if (
+    !(await page
+      .getByRole("dialog", { name: "作品库", exact: true })
+      .isVisible())
+  )
+    await page.locator(".project-trigger").click();
   await page
-    .locator(".project-list button")
-    .filter({ hasText: "木桌与绿灯 · V1 验收" })
+    .getByRole("button", { name: /预览 木桌与绿灯 · V1 验收/ })
     .last()
     .click();
+  await page.getByRole("button", { name: "打开编辑", exact: true }).click();
   await expect(page.locator(".project-trigger")).toContainText("木桌与绿灯");
   const pid = await page.evaluate(() => localStorage.getItem("forma-project"));
   const { token } = await (await page.request.get("/api/session")).json();
@@ -50,11 +55,11 @@ test("已保存真实场景的渲染、导出、失效提示与变换控件", as
     path: path.join(evidence, "final-properties-1280.png"),
     timeout: 15000,
   });
-  await page.getByRole("textbox", { name: "建模需求" }).fill("wer");
+  await page.getByRole("textbox", { name: "创作想法" }).fill("wer");
   await expect(
     page.getByRole("button", { name: "移动", exact: true }),
   ).toHaveClass(/active/);
-  await page.getByRole("textbox", { name: "建模需求" }).fill("");
+  await page.getByRole("textbox", { name: "创作想法" }).fill("");
   await page.getByRole("button", { name: "关闭属性面板" }).click();
   await page.setViewportSize({ width: 1536, height: 1024 });
   await page
@@ -68,7 +73,10 @@ test("已保存真实场景的渲染、导出、失效提示与变换控件", as
   const pending = page.waitForResponse(
     (r) => r.url().endsWith("/render") && r.request().method() === "POST",
   );
-  await page.getByRole("button", { name: "渲染", exact: true }).click();
+  await page.getByRole("button", { name: "渲染出图", exact: true }).click();
+  await page
+    .getByRole("button", { name: "按当前视角渲染", exact: true })
+    .click();
   const j = (await (await pending).json()) as Job;
   await expect
     .poll(
@@ -84,22 +92,25 @@ test("已保存真实场景的渲染、导出、失效提示与变换控件", as
     .toBe("succeeded");
   s = await settle();
   await expect(
-    page.getByAltText("当前保存版本的真实 Blender 渲染"),
+    page.getByAltText("Blender 成品图", { exact: true }),
   ).toBeVisible();
   expect(s.render!.revisionId).toBe(s.project.currentRevisionId);
   await page.screenshot({
     path: path.join(evidence, "final-render-1536.png"),
     timeout: 15000,
   });
+  await page.getByRole("button", { name: "关闭成品图" }).click();
   await page.getByRole("button", { name: "导出", exact: true }).click();
-  for (const title of ["Blender 源文件", "通用三维模型", "渲染图像"]) {
+  for (const title of ["Blender 源文件", "通用三维模型", "下载原图"]) {
+    if (title === "下载原图")
+      await page.getByRole("button", { name: "效果图", exact: true }).click();
     const pending = page.waitForEvent("download");
     await page.getByRole("link").filter({ hasText: title }).click();
     const download = await pending;
     await download.saveAs(path.join(evidence, download.suggestedFilename()));
     expect(await download.failure()).toBe(null);
   }
-  await page.getByRole("button", { name: "关闭窗口" }).click();
+  await page.getByRole("button", { name: "关闭导出" }).click();
   fs.writeFileSync(
     path.join(evidence, "final-scene.json"),
     JSON.stringify(s, null, 2),
@@ -113,7 +124,8 @@ test("已保存真实场景的渲染、导出、失效提示与变换控件", as
     .poll(async () => (await snap()).project.currentRevisionId)
     .not.toBe(s.project.currentRevisionId);
   const changed = await settle();
-  await page.getByRole("button", { name: "渲染预览", exact: true }).click();
+  await page.getByRole("button", { name: "预览", exact: true }).click();
+  await page.getByRole("button", { name: "查看成品图", exact: true }).click();
   await expect(page.locator(".render-caption")).toContainText("需要重新渲染");
   const r = await page.request.post(`/api/projects/${pid}/restore`, {
     headers,
@@ -125,10 +137,9 @@ test("已保存真实场景的渲染、导出、失效提示与变换控件", as
   });
   expect(r.ok()).toBe(true);
   await page.reload();
-  await page.getByRole("button", { name: "渲染预览", exact: true }).click();
-  await expect(page.locator(".render-caption")).not.toContainText(
-    "需要重新渲染",
-  );
+  await page.getByRole("button", { name: "预览", exact: true }).click();
+  await page.getByRole("button", { name: "查看成品图", exact: true }).click();
+  expect((await snap()).project.currentRevisionId).toBe(s.render!.revisionId);
   fs.writeFileSync(
     path.join(evidence, "render-browser-result.json"),
     JSON.stringify(

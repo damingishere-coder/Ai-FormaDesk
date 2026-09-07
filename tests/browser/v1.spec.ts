@@ -1,7 +1,7 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import type { Snapshot, Job, SceneObject } from "../../src/types";
+import type { Snapshot, SceneObject } from "../../src/types";
 const evidence = path.resolve("data/acceptance");
 fs.mkdirSync(evidence, { recursive: true });
 test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢复 → 渲染导出", async ({
@@ -10,7 +10,6 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");
-  await page.getByRole("textbox", { name: "建模需求" }).waitFor();
   const session = await (await page.request.get("/api/session")).json();
   const headers = { "X-Forma-Session": session.token };
   const request = async (url: string, body?: unknown) => {
@@ -26,22 +25,28 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     .toBe(true);
   // Start or resume the acceptance project through the visible project menu.
   const resume = process.env.FORMA_RESUME_PROJECT;
-  await page.locator(".project-trigger").click();
+  if (
+    !(await page
+      .getByRole("dialog", { name: "作品库", exact: true })
+      .isVisible())
+  )
+    await page.locator(".project-trigger").click();
   if (resume) {
     await page
-      .locator(".project-list button")
-      .filter({ hasText: "木桌与绿灯 · V1 验收" })
+      .getByRole("button", { name: /预览 木桌与绿灯 · V1 验收/ })
       .last()
       .click();
+    await page.getByRole("button", { name: "打开编辑", exact: true }).click();
   } else {
+    await page.getByRole("button", { name: "新建作品", exact: true }).click();
     await page
-      .getByRole("textbox", { name: "新项目名称" })
+      .getByRole("textbox", { name: "新作品名称" })
       .fill("木桌与绿灯 · V1 验收");
     const created = page.waitForResponse(
       (r) =>
         r.url().endsWith("/api/projects") && r.request().method() === "POST",
     );
-    await page.getByRole("button", { name: "新建", exact: true }).click();
+    await page.getByRole("button", { name: "创建作品", exact: true }).click();
     const createdProject = await (await created).json();
     await expect
       .poll(() => page.evaluate(() => localStorage.getItem("forma-project")))
@@ -69,6 +74,19 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     expect(text.join("")).toBe("");
     return s;
   }
+  async function discussAndBuild() {
+    const input = page.getByRole("textbox", { name: "创作想法" });
+    await input.fill(
+      (await input.inputValue()) + " 请采用合理默认值，直接给出可执行方案。",
+    );
+    await page.getByRole("button", { name: "发送讨论" }).click();
+    const button = page
+      .getByRole("button", { name: /^(开始建模|应用修改)$/ })
+      .last();
+    await expect(button).toBeEnabled({ timeout: 600000 });
+    await button.click();
+    await page.getByRole("button", { name: "收起创作对话" }).click();
+  }
   async function perform(action: () => Promise<unknown>) {
     const prior = (await snap()).project.currentRevisionId;
     await action();
@@ -84,13 +102,9 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     return settled();
   }
   await page
-    .getByRole("textbox", { name: "建模需求" })
+    .getByRole("textbox", { name: "创作想法" })
     .fill("做一张木桌，桌上放一盏绿色台灯。");
-  let s = resume
-    ? await snap()
-    : await perform(() =>
-        page.getByRole("button", { name: "发送建模需求" }).click(),
-      );
+  let s = resume ? await snap() : await perform(() => discussAndBuild());
   expect(s.scene.objects.length).toBeGreaterThan(4);
   const first = s.project.currentRevisionId!;
   console.log("FIRST_GENERATION", pid, first, s.scene.stats);
@@ -175,7 +189,6 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     JSON.stringify(s, null, 2),
   );
   await page.reload();
-  await page.getByRole("textbox", { name: "建模需求" }).waitFor();
   await select(colored);
   await page.getByRole("button", { name: "外观", exact: true }).click();
   await expect(page.getByLabel("基础颜色")).toHaveValue("#2c455e");
@@ -189,16 +202,14 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     composer = await page.locator(".composer").boundingBox();
   expect(inspector!.x).toBeGreaterThan(composer!.x + composer!.width);
   // Input shortcuts must not change the active canvas tool.
-  await page.getByRole("textbox", { name: "建模需求" }).fill("wer");
+  await page.getByRole("textbox", { name: "创作想法" }).fill("wer");
   await expect(
     page.getByRole("button", { name: "选择", exact: true }),
   ).toHaveClass(/active/);
   await page
-    .getByRole("textbox", { name: "建模需求" })
+    .getByRole("textbox", { name: "创作想法" })
     .fill("增加一个杯子，保留已有对象的位置、旋转、缩放和颜色。");
-  s = await perform(() =>
-    page.getByRole("button", { name: "发送建模需求" }).click(),
-  );
+  s = await perform(() => discussAndBuild());
   for (const id of [lamp.id, table.id, colored.id]) {
     const before = edited.scene.objects.find((o) => o.id === id)!,
       after = s.scene.objects.find((o) => o.id === id)!;
@@ -242,11 +253,9 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     .toBe(edited.project.currentRevisionId);
   await page.getByRole("button", { name: "关闭窗口" }).click();
   await page
-    .getByRole("textbox", { name: "建模需求" })
+    .getByRole("textbox", { name: "创作想法" })
     .fill("在当前版本的桌上增加一个小杯子，保留已有物件的变换和颜色。");
-  s = await perform(() =>
-    page.getByRole("button", { name: "发送建模需求" }).click(),
-  );
+  s = await perform(() => discussAndBuild());
   expect(s.revision!.parentId).toBe(edited.project.currentRevisionId);
   expect(
     (await request(`/projects/${pid}/revisions`)).some(
@@ -260,7 +269,10 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     .click()
     .catch(() => {});
   await page.getByRole("combobox", { name: "观察视角" }).selectOption("front");
-  await page.getByRole("button", { name: "渲染", exact: true }).click();
+  await page.getByRole("button", { name: "渲染出图", exact: true }).click();
+  await page
+    .getByRole("button", { name: "按当前视角渲染", exact: true })
+    .click();
   await expect
     .poll(
       async () => {
@@ -284,22 +296,25 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     4,
   );
   await expect(
-    page.getByAltText("当前保存版本的真实 Blender 渲染"),
+    page.getByAltText("Blender 成品图", { exact: true }),
   ).toBeVisible();
   await page.screenshot({
     timeout: 15000,
     animations: "disabled",
     path: path.join(evidence, "render-1536.png"),
   });
+  await page.getByRole("button", { name: "关闭成品图" }).click();
   await page.getByRole("button", { name: "导出", exact: true }).click();
-  for (const title of ["Blender 源文件", "通用三维模型", "渲染图像"]) {
+  for (const title of ["Blender 源文件", "通用三维模型", "下载原图"]) {
+    if (title === "下载原图")
+      await page.getByRole("button", { name: "效果图", exact: true }).click();
     const download = page.waitForEvent("download");
     await page.getByRole("link").filter({ hasText: title }).click();
     const d = await download;
     await d.saveAs(path.join(evidence, d.suggestedFilename()));
     expect(await d.failure()).toBe(null);
   }
-  await page.getByRole("button", { name: "关闭窗口" }).click();
+  await page.getByRole("button", { name: "关闭导出" }).click();
   fs.writeFileSync(
     path.join(evidence, "final-scene.json"),
     JSON.stringify(s, null, 2),
@@ -311,7 +326,8 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
   s = await perform(() =>
     page.getByRole("button", { name: "应用并保存" }).click(),
   );
-  await page.getByRole("button", { name: "渲染预览", exact: true }).click();
+  await page.getByRole("button", { name: "预览", exact: true }).click();
+  await page.getByRole("button", { name: "查看成品图", exact: true }).click();
   await expect(page.locator(".render-caption")).toContainText("需要重新渲染");
   // Return to the rendered version as a clean, reviewable final state.
   await request(`/projects/${pid}/restore`, {
@@ -320,7 +336,8 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     action: "restore",
   });
   await page.reload();
-  await page.getByRole("button", { name: "渲染预览", exact: true }).click();
+  await page.getByRole("button", { name: "预览", exact: true }).click();
+  await page.getByRole("button", { name: "查看成品图", exact: true }).click();
   expect(errors).toEqual([]);
   fs.writeFileSync(
     path.join(evidence, "browser-result.json"),

@@ -5,6 +5,7 @@ import { DATA, ROOT, limits } from "./config";
 import { runBlender } from "./sandbox";
 import { assertExecution, environment } from "./environment";
 import { codex } from "./codex";
+import { attachmentPath, validateAttachments } from "./attachments";
 import {
   db,
   put,
@@ -16,18 +17,20 @@ import {
   revision,
   activeJob,
   addMessage,
+  invalidateProposals,
 } from "./store";
 import {
   sceneSchema,
   type Job,
   type Revision,
-  type SceneCommand,
-  type CameraSpec,
   type Project,
+  type Proposal,
+  type Message,
 } from "../src/types";
 export const jobEvents = new EventEmitter();
 jobEvents.setMaxListeners(100);
 const controllers = new Map<string, AbortController>();
+const queuedPayloads = new Map<string, any>();
 let queue = Promise.resolve();
 export type Artifact = {
   id: string;
@@ -145,9 +148,9 @@ export function enqueue(
   type: string,
   payload: any,
 ) {
-  assertExecution();
+  if (type !== "discuss") assertExecution();
   const p = assertBase(pid, base);
-  if (type === "generate" && !environment.codex.ok)
+  if (["generate", "discuss"].includes(type) && !environment.codex.ok)
     throw Object.assign(
       new Error(environment.codex.error || "Codex 暂不可用，请检查登录和模型"),
       { statusCode: 503 },
@@ -177,7 +180,28 @@ export function enqueue(
   put("job", j);
   const ctrl = new AbortController();
   controllers.set(j.id, ctrl);
-  if (type === "generate") addMessage(pid, "user", payload.prompt);
+  queuedPayloads.set(j.id, payload);
+  if (type === "generate")
+    addMessage(
+      pid,
+      "user",
+      payload.proposalId ? "执行方案：" + payload.prompt : payload.prompt,
+      { jobId: j.id },
+    );
+  if (type === "discuss") {
+    invalidateProposals(pid);
+    const images = validateAttachments(pid, payload.attachmentIds || []);
+    for (const a of images) put("attachment", { ...a, used: true });
+    addMessage(pid, "user", payload.prompt, {
+      attachmentIds: images.map((a) => a.id),
+      jobId: j.id,
+    });
+    payload.replyId = addMessage(pid, "assistant", "", {
+      status: "pending",
+      jobId: j.id,
+    }).id;
+  }
+  put("project", { ...project(pid), updatedAt: now() });
   // One global Blender/AI pipeline at a time, keeping M2 memory usage bounded.
   queue = queue.then(() => perform(j, p, payload, ctrl)).catch(() => {});
   return j;
@@ -189,6 +213,11 @@ async function perform(
   ctrl: AbortController,
 ) {
   const signal = ctrl.signal;
+  if (signal.aborted) {
+    controllers.delete(j.id);
+    queuedPayloads.delete(j.id);
+    return;
+  }
   let dir = "";
   try {
     if (signal.aborted) throw new Error("任务已取消");
@@ -201,6 +230,58 @@ async function perform(
             ? "准备渲染"
             : "保存修改",
     });
+    if (j.type === "discuss") {
+      update(j, { stage: "正在讨论创作想法" });
+      const history = list<Message>("message", p.id)
+        .filter((m) => m.status === "completed")
+        .slice(-24);
+      const imageIds: string[] = payload.attachmentIds.length
+        ? payload.attachmentIds
+        : [...history].reverse().find((m) => m.attachmentIds?.length)
+            ?.attachmentIds || [];
+      const images = validateAttachments(p.id, imageIds);
+      const context = `当前用户消息：${payload.prompt || "（仅发送了图片，请先询问用途）"}\n当前版本：${j.baseRevisionId || "空白"}\n选中对象：${payload.objectId || "无"}\n场景：${JSON.stringify(j.baseRevisionId ? revision(j.baseRevisionId).scene : { objects: [] })}\n近期对话：${JSON.stringify(history.map((m) => ({ role: m.role, text: m.text, attachmentIds: m.attachmentIds })))}\n本轮可见图片：${JSON.stringify(images.map((a, i) => ({ number: i + 1, id: a.id, name: a.name })))}。方案只能引用本轮可见图片。`;
+      const result = await codex.discuss(
+        p.id,
+        project(p.id).discussionThreadId || null,
+        context,
+        signal,
+        (id) => put("project", { ...project(p.id), discussionThreadId: id }),
+        () => {},
+        images.map((a) => attachmentPath(p.id, a.id)),
+      );
+      if (signal.aborted) throw new Error("任务已取消");
+      let proposalId: string | undefined;
+      if (result.proposal) {
+        const chosen = result.proposal.attachmentIds;
+        if (chosen.some((id) => !imageIds.includes(id)))
+          throw new Error("方案引用了本轮不可见的图片，请重新整理方案");
+        proposalId = uid();
+        put<Proposal>("proposal", {
+          id: proposalId,
+          projectId: p.id,
+          baseRevisionId: j.baseRevisionId,
+          objectId: payload.objectId || null,
+          title: result.proposal.title,
+          description: result.proposal.description,
+          attachmentIds: chosen,
+          status: "ready",
+          createdAt: now(),
+        });
+      }
+      put("message", {
+        ...get<Message>("message", payload.replyId)!,
+        text: result.reply,
+        status: "completed",
+        proposalId,
+      });
+      update(j, {
+        status: "succeeded",
+        stage: "讨论完成",
+        message: "回复已保存",
+      });
+      return;
+    }
     const root = path.join(DATA, "jobs", j.id);
     fs.mkdirSync(root, { recursive: true });
     dir = path.join(root, "attempt-0");
@@ -213,7 +294,7 @@ async function perform(
     if (j.type === "render") {
       fs.writeFileSync(
         path.join(dir, "camera.json"),
-        JSON.stringify(payload.camera),
+        JSON.stringify({ ...payload.camera, settings: payload.settings }),
       );
       update(j, { stage: "Blender 正在渲染" });
       const r = await runBlender(
@@ -250,13 +331,14 @@ async function perform(
         revisionId: j.baseRevisionId!,
         artifactId: id,
         camera: payload.camera,
+        settings: payload.settings,
         createdAt: now(),
       } as any);
       update(j, {
         status: "succeeded",
         stage: "渲染完成",
         renderArtifactId: id,
-        message: "1280 × 720 · EEVEE 渲染已保存",
+        message: `${payload.settings.width} × ${payload.settings.height} · EEVEE 渲染已保存`,
       });
       return;
     }
@@ -264,7 +346,7 @@ async function perform(
     let script = "";
     let summary = "";
     if (j.type === "generate") {
-      let context = `用户指令：${payload.prompt}\n当前版本：${j.baseRevisionId || "空白场景"}\n选中对象 ID：${payload.objectId || "无"}\n最新场景：${JSON.stringify(j.baseRevisionId ? revision(j.baseRevisionId).scene : { objects: [] })}`;
+      let context = `用户指令：${payload.prompt}\n当前版本：${j.baseRevisionId || "空白场景"}\n选中对象 ID：${payload.objectId || "无"}\n参考图片（按顺序）：${JSON.stringify(payload.attachmentIds || [])}\n最新场景：${JSON.stringify(j.baseRevisionId ? revision(j.baseRevisionId).scene : { objects: [] })}`;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (signal.aborted) throw new Error("任务已取消");
         update(j, { stage: attempt ? `修复脚本（${attempt}/2）` : "生成脚本" });
@@ -278,6 +360,9 @@ async function perform(
             put("project", { ...current, threadId: id });
           },
           () => {},
+          (payload.attachmentIds || []).map((id: string) =>
+            attachmentPath(p.id, id),
+          ),
         );
         script = result.python;
         summary = result.summary;
@@ -354,7 +439,18 @@ async function perform(
         artifacts,
       };
       put("revision", r);
-      put("project", { ...project(p.id), currentRevisionId: rid, redo: [] });
+      invalidateProposals(p.id);
+      put("project", {
+        ...project(p.id),
+        currentRevisionId: rid,
+        redo: [],
+        updatedAt: now(),
+      });
+      if (payload.proposalId)
+        put("proposal", {
+          ...get<Proposal>("proposal", payload.proposalId)!,
+          status: "succeeded",
+        });
       update(j, {
         status: "succeeded",
         stage: "完成",
@@ -369,9 +465,22 @@ async function perform(
       stage: signal.aborted ? "已取消" : "失败",
       error: (e as Error).message || "执行失败",
     });
-    if (j.type === "generate") addMessage(p.id, "error", j.error!);
+    if (j.type === "generate")
+      addMessage(p.id, "error", j.error!, { jobId: j.id });
+    if (payload.proposalId)
+      put("proposal", {
+        ...get<Proposal>("proposal", payload.proposalId)!,
+        status: "failed",
+      });
+    if (j.type === "discuss")
+      put("message", {
+        ...get<Message>("message", payload.replyId)!,
+        text: j.error!,
+        status: signal.aborted ? "cancelled" : "failed",
+      });
   } finally {
     controllers.delete(j.id);
+    queuedPayloads.delete(j.id);
   }
 }
 export function cancel(id: string) {
@@ -379,8 +488,24 @@ export function cancel(id: string) {
   if (!j) throw Object.assign(new Error("任务不存在"), { statusCode: 404 });
   if (["queued", "running"].includes(j.status)) {
     controllers.get(id)?.abort();
-    if (j.status === "queued")
+    if (j.status === "queued") {
+      const payload = queuedPayloads.get(j.id);
       update(j, { status: "cancelled", stage: "已取消", error: "任务已取消" });
+      if (payload?.proposalId) {
+        const proposal = get<Proposal>("proposal", payload.proposalId);
+        if (proposal) put("proposal", { ...proposal, status: "failed" });
+      }
+      if (payload?.replyId) {
+        const message = get<Message>("message", payload.replyId);
+        if (message)
+          put("message", {
+            ...message,
+            status: "cancelled",
+            text: "任务已取消",
+          });
+      } else if (j.type === "generate")
+        addMessage(j.projectId, "error", "任务已取消", { jobId: j.id });
+    }
   }
   return j;
 }
@@ -408,6 +533,7 @@ export function restore(
     throw Object.assign(new Error("不能恢复其他项目的版本"), {
       statusCode: 400,
     });
-  put("project", { ...p, currentRevisionId: next, redo });
+  invalidateProposals(pid);
+  put("project", { ...p, currentRevisionId: next, redo, updatedAt: now() });
   return project(pid);
 }

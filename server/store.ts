@@ -2,7 +2,14 @@ import Database from "better-sqlite3";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { DATA } from "./config";
-import type { Project, Revision, Job, Render } from "../src/types";
+import type {
+  Project,
+  Revision,
+  Job,
+  Render,
+  Message,
+  Proposal,
+} from "../src/types";
 export const db = new Database(path.join(DATA, "index.sqlite"));
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
@@ -38,9 +45,13 @@ export function list<T>(kind: string, projectId?: string): T[] {
 }
 export const uid = () => randomUUID();
 export const now = () => new Date().toISOString();
-export function project(id: string) {
+export function project(id: string, includeDeleted = false) {
   const p = get<Project>("project", id);
   if (!p) throw Object.assign(new Error("项目不存在"), { statusCode: 404 });
+  if (!includeDeleted && p.deletedAt)
+    throw Object.assign(new Error("作品已移入回收站，请先恢复"), {
+      statusCode: 409,
+    });
   return p;
 }
 export function revision(id: string) {
@@ -55,14 +66,26 @@ export function activeJob(pid: string) {
     ) || null
   );
 }
-export function addMessage(pid: string, role: string, text: string) {
-  put("message", {
+export function addMessage(
+  pid: string,
+  role: string,
+  text: string,
+  extra: Partial<Message> = {},
+) {
+  return put<Message>("message", {
     id: uid(),
     projectId: pid,
     role,
     text,
     createdAt: now(),
-  } as any);
+    status: "completed",
+    ...extra,
+  });
+}
+export function invalidateProposals(pid: string) {
+  for (const p of list<Proposal>("proposal", pid))
+    if (p.status === "ready" || p.status === "failed")
+      put("proposal", { ...p, status: "stale" });
 }
 export function latestRender(pid: string) {
   return list<Render>("render", pid).at(-1) || null;
@@ -77,4 +100,13 @@ export function recoverInterrupted() {
         error: "后台已重新启动，未完成的任务已终止。已保存版本不受影响。",
         updatedAt: now(),
       } as Job);
+  for (const m of list<Message>("message"))
+    if (m.status === "pending")
+      put("message", {
+        ...m,
+        status: "failed",
+        text: "后台已重启，回复中断，请重新发送。",
+      });
+  for (const p of list<Proposal>("proposal"))
+    if (p.status === "running") put("proposal", { ...p, status: "failed" });
 }

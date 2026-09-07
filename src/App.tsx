@@ -14,25 +14,28 @@ import {
   Scan,
   Layers,
   History,
-  MessageSquare,
   ArrowUp,
-  Square,
   X,
-  Plus,
   Loader2,
   AlertCircle,
   Settings2,
   EyeOff,
   Lightbulb,
   CheckCircle2,
-  ExternalLink,
   Maximize,
-  FolderOpen,
-  Pencil,
 } from "lucide-react";
 import { api } from "./api";
 import { Viewport, type ViewportHandle } from "./Viewport";
 import { Inspector } from "./Inspector";
+import { Composer } from "./Composer";
+import { ProjectLibrary } from "./ProjectLibrary";
+import { ExportPanel } from "./ExportPanel";
+import {
+  defaultRenderSettings,
+  type RenderSettings,
+  type CameraSpec,
+  type Proposal,
+} from "./types";
 import type { Project, Snapshot, Job, SceneCommand, Revision } from "./types";
 const terminal = (j: Job) =>
   ["succeeded", "failed", "cancelled"].includes(j.status);
@@ -44,8 +47,7 @@ const shortDate = (s: string) =>
     minute: "2-digit",
   });
 export function App() {
-  const [projects, setProjects] = useState<Project[]>([]),
-    [pid, setPid] = useState(localStorage.getItem("forma-project") || ""),
+  const [pid, setPid] = useState(localStorage.getItem("forma-project") || ""),
     [snapshot, setSnapshot] = useState<Snapshot | null>(null),
     [health, setHealth] = useState<any>(null),
     [selected, setSelected] = useState<string | null>(null),
@@ -60,10 +62,19 @@ export function App() {
     [notice, setNotice] = useState(""),
     [revisions, setRevisions] = useState<Revision[]>([]),
     [renderView, setRenderView] = useState(false),
-    [newName, setNewName] = useState(""),
-    [rename, setRename] = useState(false),
     [view, setView] = useState("perspective"),
     [reloadKey, setReloadKey] = useState(0);
+  const [chatExpanded, setChatExpanded] = useState(false);
+  const [showRender, setShowRender] = useState(false);
+  const [settings, setSettings] = useState<RenderSettings>(
+    defaultRenderSettings,
+  );
+  const [cameraState, setCameraState] = useState<CameraSpec | null>(null);
+  const onCameraChange = useCallback((v: CameraSpec) => {
+    setCameraState((old) =>
+      JSON.stringify(old) === JSON.stringify(v) ? old : v,
+    );
+  }, []);
   const viewport = useRef<ViewportHandle>(null),
     currentPid = useRef(pid),
     submitLock = useRef(false);
@@ -81,7 +92,6 @@ export function App() {
   }, []);
   const loadProjects = async () => {
     const p = await api<Project[]>("/projects");
-    setProjects(p);
     return p;
   };
   useEffect(() => {
@@ -91,12 +101,12 @@ export function App() {
         const [p, h] = await Promise.all([loadProjects(), api("/health")]);
         if (!alive) return;
         setHealth(h);
-        if (p.length && !p.some((x) => x.id === currentPid.current))
-          setPid(p[0].id);
-        else if (!p.length) {
-          const n = await api<Project>("/projects", { name: "我的第一个作品" });
-          setProjects([n]);
-          setPid(n.id);
+        if (
+          !currentPid.current ||
+          !p.some((x) => x.id === currentPid.current)
+        ) {
+          setPid("");
+          setPanel("projects");
         }
       } catch (e) {
         setError((e as Error).message);
@@ -107,13 +117,21 @@ export function App() {
     };
   }, []);
   useEffect(() => {
-    if (!pid) return;
+    if (!pid) {
+      setSnapshot(null);
+      setJob(null);
+      localStorage.removeItem("forma-project");
+      return;
+    }
     currentPid.current = pid;
     localStorage.setItem("forma-project", pid);
     setSnapshot(null);
     setJob(null);
     setSelected(null);
     setRenderView(false);
+    setShowRender(false);
+    setChatExpanded(false);
+    setSettings(defaultRenderSettings);
     setReloadKey(0);
     void load(pid).catch((e) => setError(e.message));
   }, [pid, load]);
@@ -139,11 +157,21 @@ export function App() {
         ending = true;
         setSubmitting(false);
         submitLock.current = false;
-        setReloadKey((k) => k + 1);
+        if (j.type !== "discuss" && j.type !== "render")
+          setReloadKey((k) => k + 1);
         await load(p);
         if (j.status === "succeeded") {
-          setNotice(j.message || "已保存");
-          if (j.type === "render") setRenderView(true);
+          if (j.type !== "discuss")
+            setNotice(
+              j.type === "generate"
+                ? "建模已完成，详细结果保存在对话中。"
+                : j.message || "已保存",
+            );
+          if (j.type === "render") {
+            setRenderView(true);
+            setShowRender(true);
+            setPanel("");
+          }
         } else setError(j.error || "任务已取消");
       }
     };
@@ -170,6 +198,7 @@ export function App() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
+      if (document.querySelector(".project-library")) return;
       if (
         target.closest("input,textarea,select,[contenteditable=true]") ||
         busy
@@ -185,6 +214,8 @@ export function App() {
         e.preventDefault();
       }
       if (e.key === "Escape") {
+        setChatExpanded(false);
+        setShowRender(false);
         setSelected(null);
         setPanel("");
       }
@@ -193,33 +224,51 @@ export function App() {
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [busy]);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(""), 5000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   async function startJob(endpoint: string, body: unknown) {
-    if (submitLock.current || busy) return;
+    if (submitLock.current || busy) return false;
     submitLock.current = true;
     setSubmitting(true);
     setError("");
     setNotice("");
+    const taskPid = pid;
     try {
-      const j = await api<Job>(`/projects/${pid}/${endpoint}`, body);
+      const j = await api<Job>(`/projects/${taskPid}/${endpoint}`, body);
+      if (currentPid.current !== taskPid) return true;
       setJob(j);
+      // Accepted messages must not be resent just because refreshing the view failed.
+      await load(taskPid).catch((e) =>
+        setError("任务已提交，刷新状态失败：" + e.message),
+      );
+      return true;
     } catch (e) {
-      setError((e as Error).message);
-      await load(pid);
-      setReloadKey((k) => k + 1);
+      if (currentPid.current === taskPid) {
+        setError((e as Error).message);
+        await load(taskPid).catch(() => {});
+        setReloadKey((k) => k + 1);
+      }
+      return false;
     } finally {
       setSubmitting(false);
       submitLock.current = false;
     }
   }
-  async function generate() {
-    if (!prompt.trim()) return;
-    const text = prompt;
-    await startJob("generate", {
-      baseRevisionId: base,
-      prompt: text,
-      objectId: selected,
-    });
-    setPrompt("");
+  async function discuss(text: string, attachmentIds: string[]) {
+    return (
+      (await startJob("discuss", {
+        baseRevisionId: base,
+        prompt: text,
+        objectId: selected,
+        attachmentIds,
+      })) || false
+    );
+  }
+  async function buildProposal(proposal: Proposal) {
+    await startJob("generate", { proposalId: proposal.id });
   }
   async function command(c: Partial<SceneCommand>, id = selected) {
     if (!base || !id) return;
@@ -253,33 +302,35 @@ export function App() {
       setRevisions(await api(`/projects/${pid}/revisions`));
     if (name === "projects") await loadProjects();
   }
-  async function saveProject() {
-    if (!newName.trim()) return;
-    try {
-      if (rename) {
-        await api(`/projects/${pid}`, { name: newName }, "PATCH");
-        await load(pid);
-      } else {
-        const p = await api<Project>("/projects", { name: newName });
-        setPid(p.id);
-      }
-      await loadProjects();
-      setNewName("");
-      setRename(false);
-      setPanel("");
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
   async function render() {
     if (!base || !viewport.current) return;
     await startJob("render", {
       baseRevisionId: base,
-      camera: viewport.current.camera(),
+      camera: {
+        ...viewport.current.camera(),
+        fov: 42,
+        aspect: settings.width / settings.height,
+      },
+      settings,
     });
   }
   const saved = !!snapshot && !busy;
-  const renderStale = !!snapshot?.render && snapshot.render.revisionId !== base;
+  const frameAspect =
+    settings.width > 0 && settings.height > 0
+      ? settings.width / settings.height
+      : 16 / 9;
+  const imageSettings = snapshot?.render?.settings || defaultRenderSettings;
+  const renderStale =
+    !!snapshot?.render &&
+    (snapshot.render.revisionId !== base ||
+      JSON.stringify(imageSettings) !== JSON.stringify(settings) ||
+      (!!cameraState &&
+        ["position", "target", "up"].some((k) =>
+          cameraState[k as "position"].some(
+            (n, i) =>
+              Math.abs(n - snapshot.render!.camera[k as "position"][i]) > 0.001,
+          ),
+        )));
   return (
     <div className="workbench">
       <header className="topbar">
@@ -294,7 +345,7 @@ export function App() {
           className="project-trigger"
           onClick={() => void openPanel("projects")}
         >
-          <span>{snapshot?.project.name || "载入项目…"}</span>
+          <span>{snapshot?.project.name || "选择或新建作品"}</span>
           <ChevronDown size={15} />
         </button>
         <span
@@ -329,22 +380,34 @@ export function App() {
           <button
             className="button"
             disabled={!base || busy}
-            onClick={() => void render()}
+            onClick={() => {
+              setRenderView(true);
+              setChatExpanded(false);
+              void openPanel("render");
+            }}
           >
             <Image size={16} />
-            渲染
+            渲染出图
           </button>
           <button
             className="button dark"
             disabled={!base}
-            onClick={() => void openPanel("export")}
+            onClick={() => {
+              setRenderView(true);
+              setChatExpanded(false);
+              void openPanel("export");
+            }}
           >
             <Download size={16} />
             导出
           </button>
         </div>
       </header>
-      <main className="canvas-stage" aria-label="三维工作画布">
+      <main
+        className="canvas-stage"
+        aria-label="三维工作画布"
+        onPointerDown={() => setChatExpanded(false)}
+      >
         {snapshot && (
           <Viewport
             key={pid}
@@ -356,6 +419,9 @@ export function App() {
             }
             scene={snapshot.scene}
             selected={selected}
+            readOnly={renderView}
+            onCameraChange={onCameraChange}
+            frameAspect={renderView ? frameAspect : undefined}
             onSelect={setSelected}
             mode={mode}
             busy={busy}
@@ -366,18 +432,64 @@ export function App() {
           />
         )}
       </main>
-      {renderView && snapshot?.render && (
-        <div className="render-stage">
+      {renderView && base && (
+        <div className="preview-label glass">
+          实时材质预览 · 拖动旋转
+          {snapshot?.render && (
+            <button onClick={() => setShowRender(true)}>查看成品图</button>
+          )}
+        </div>
+      )}
+      {renderView && base && (
+        <div
+          className="frame-guide"
+          style={{
+            width: `min(100vw, calc(100vh * ${frameAspect}))`,
+            height: `min(100vh, calc(100vw / ${frameAspect}))`,
+          }}
+        >
+          <span>
+            {settings.width} × {settings.height}
+          </span>
+        </div>
+      )}
+      {showRender && snapshot?.render && (
+        <div
+          className="render-lightbox"
+          role="dialog"
+          aria-label="Blender 成品图"
+          onClick={() => setShowRender(false)}
+        >
+          <button
+            className="round glass"
+            aria-label="关闭成品图"
+            onClick={() => setShowRender(false)}
+          >
+            <X />
+          </button>
           <img
             src={`/api/artifacts/${snapshot.render.artifactId}`}
-            alt="当前保存版本的真实 Blender 渲染"
+            alt="Blender 成品图"
+            onClick={(e) => e.stopPropagation()}
           />
-          <div className={"render-caption " + (renderStale ? "stale" : "")}>
-            {renderStale ? "需要重新渲染 · 场景已有修改" : "EEVEE · 1280 × 720"}
+          <div
+            className={"render-caption " + (renderStale ? "stale" : "")}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {renderStale
+              ? "需要重新渲染 · 场景、视角或设置已变化"
+              : "Blender · EEVEE"}
             <span>
-              版本 {snapshot.render.revisionId.slice(0, 8)} ·{" "}
-              {shortDate(snapshot.render.createdAt)}
+              {imageSettings.width} × {imageSettings.height} ·{" "}
+              {imageSettings.transparent ? "透明背景" : "不透明背景"} · 版本{" "}
+              {snapshot.render.revisionId.slice(0, 8)}
             </span>
+            <a
+              className="button"
+              href={`/api/artifacts/${snapshot.render.artifactId}?download=1`}
+            >
+              下载原图
+            </a>
           </div>
         </div>
       )}
@@ -390,13 +502,13 @@ export function App() {
         </button>
         <button
           className={renderView ? "active" : ""}
-          disabled={!snapshot?.render}
+          disabled={!base}
           onClick={() => setRenderView(true)}
         >
-          渲染预览{renderStale && <i />}
+          预览
         </button>
       </div>
-      {!base && !busy && (
+      {!base && !busy && snapshot && (
         <div className="empty-state">
           <div className="empty-cube">
             <Box strokeWidth={0.8} size={66} />
@@ -407,7 +519,7 @@ export function App() {
             <br />
             放进眼前的空间。
           </h1>
-          <p>描述你想创造的东西，剩下的交给造物。</p>
+          <p>聊聊想法，放入参考图，一起把细节想清楚。</p>
           <button
             className="example"
             onClick={() => setPrompt("做一张木桌，桌上放一盏绿色台灯。")}
@@ -475,109 +587,30 @@ export function App() {
           </button>
         </div>
       )}
-      <section
-        className={
-          "composer-wrap " + (object && !renderView ? "has-selection" : "")
-        }
-        aria-label="AI 建模对话"
-      >
-        <button className="history-link" onClick={() => void openPanel("chat")}>
-          <MessageSquare size={14} />
-          对话记录
-          {snapshot?.messages.length ? ` · ${snapshot.messages.length}` : ""}
-        </button>
-        <div className="composer glass">
-          <div className="context-line">
-            {object ? (
-              <button
-                className="selection-chip"
-                onClick={() => setSelected(null)}
-              >
-                <Box size={14} />
-                <span>{object.name}</span>
-                <X size={12} />
-              </button>
-            ) : (
-              <span className="context-dot" />
-            )}
-            <span className="context-text">
-              {busy
-                ? job?.stage || "正在提交任务…"
-                : job?.status === "succeeded" && job.message
-                  ? job.message
-                  : base
-                    ? "继续雕琢你的想法，或选中模型直接调整。"
-                    : "每一个好作品，都从一个想法开始。"}
-            </span>
-            {busy && <Loader2 size={14} className="spin" />}
-          </div>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void generate();
-            }}
-          >
-            <textarea
-              aria-label="建模需求"
-              value={prompt}
-              placeholder={
-                base
-                  ? "继续描述，或选中模型直接调整…"
-                  : "想创造什么？例如，一张木桌和绿色台灯…"
-              }
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (
-                  e.key === "Enter" &&
-                  !e.shiftKey &&
-                  !e.nativeEvent.isComposing
-                ) {
-                  e.preventDefault();
-                  if (!busy && health?.ok) void generate();
-                }
-              }}
-              disabled={busy}
-              rows={2}
-            />
-            <div className="composer-bottom">
-              <button
-                type="button"
-                className="model-badge"
-                onClick={() => void openPanel("health")}
-              >
-                <span className={"status-dot " + (health?.ok ? "ok" : "")} />
-                Codex<span className="model-detail">Astra · 高</span>
-              </button>
-              <span className="input-hint">
-                Enter 发送 · Shift + Enter 换行
-              </span>
-              {busy ? (
-                <button
-                  type="button"
-                  className="send stop"
-                  aria-label="停止任务"
-                  onClick={() =>
-                    job &&
-                    void api(`/jobs/${job.id}/cancel`, {}).catch((e) =>
-                      setError(e.message),
-                    )
-                  }
-                >
-                  <Square size={17} />
-                </button>
-              ) : (
-                <button
-                  className="send"
-                  aria-label="发送建模需求"
-                  disabled={!prompt.trim() || !health?.ok || !snapshot}
-                >
-                  <ArrowUp size={23} />
-                </button>
-              )}
-            </div>
-          </form>
-        </div>
-      </section>
+      {snapshot && (
+        <Composer
+          key={pid}
+          snapshot={snapshot}
+          busy={busy}
+          job={job}
+          aiReady={!!health?.codex?.ok}
+          modelReady={!!health?.ok}
+          selected={selected}
+          expanded={chatExpanded}
+          onExpanded={setChatExpanded}
+          onDiscuss={discuss}
+          onBuild={(p) => void buildProposal(p)}
+          onStop={() => {
+            if (job)
+              void api(`/jobs/${job.id}/cancel`, {}).catch((e) =>
+                setError(e.message),
+              );
+          }}
+          onHealth={() => void openPanel("health")}
+          onError={setError}
+          suggested={prompt}
+        />
+      )}
       <div className="bottom-left">
         <button
           className={"button glass " + (panel === "scene" ? "pressed" : "")}
@@ -611,7 +644,6 @@ export function App() {
             onChange={(e) => {
               setView(e.target.value);
               viewport.current?.view(e.target.value);
-              setRenderView(false);
             }}
           >
             <option value="perspective">透视视角</option>
@@ -673,7 +705,38 @@ export function App() {
           </footer>
         </aside>
       )}
-      {["projects", "history", "chat", "export", "health"].includes(panel) && (
+      {panel === "projects" && (
+        <ProjectLibrary
+          currentId={pid}
+          onOpen={(id) => {
+            setPid(id);
+            setPanel("");
+            setPrompt("");
+          }}
+          onClose={() => setPanel("")}
+          onRemoved={(id) => {
+            if (id === pid) setPid("");
+          }}
+          onError={setError}
+        />
+      )}
+      {["export", "render"].includes(panel) && snapshot && (
+        <ExportPanel
+          snapshot={snapshot}
+          settings={settings}
+          onSettings={setSettings}
+          busy={busy}
+          stale={renderStale}
+          initial={panel === "render" ? "image" : "model"}
+          onRender={() => void render()}
+          onViewImage={() => {
+            setPanel("");
+            setShowRender(true);
+          }}
+          onClose={() => setPanel("")}
+        />
+      )}
+      {["history", "health"].includes(panel) && (
         <div className="modal-backdrop" onClick={() => setPanel("")}>
           <section
             className={"modal glass " + (panel === "chat" ? "chat-modal" : "")}
@@ -710,64 +773,13 @@ export function App() {
                 <X size={20} />
               </button>
             </header>
-            {panel === "projects" && (
-              <>
-                <p className="muted">作品保存在这台 Mac 上。</p>
-                <div className="project-list">
-                  {projects.map((p) => (
-                    <button
-                      className={p.id === pid ? "current" : ""}
-                      key={p.id}
-                      onClick={() => {
-                        setPid(p.id);
-                        setPanel("");
-                      }}
-                    >
-                      <FolderOpen size={21} />
-                      <span>
-                        {p.name}
-                        <small>{shortDate(p.createdAt)}</small>
-                      </span>
-                      {p.id === pid && <Check size={16} />}
-                    </button>
-                  ))}
-                </div>
-                <form
-                  className="new-project"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void saveProject();
-                  }}
-                >
-                  <input
-                    aria-label={rename ? "项目新名称" : "新项目名称"}
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder={rename ? "输入当前项目的新名称" : "新作品名称"}
-                  />
-                  <button className="button dark" disabled={!newName.trim()}>
-                    {rename ? <Pencil size={15} /> : <Plus size={16} />}{" "}
-                    {rename ? "重命名" : "新建"}
-                  </button>
-                </form>
-                <button
-                  className="text-button"
-                  onClick={() => {
-                    setRename(!rename);
-                    setNewName(rename ? "" : snapshot?.project.name || "");
-                  }}
-                >
-                  {rename ? "取消重命名" : "重命名当前项目"}
-                </button>
-              </>
-            )}
             {panel === "history" && (
               <>
                 <p className="muted">
                   每次成功修改保存一个独立版本。恢复后继续创作，原历史依然保留。
                 </p>
                 <div className="revision-list">
-                  {[...revisions].reverse().map((r, i) => (
+                  {[...revisions].reverse().map((r) => (
                     <div key={r.id} className={r.id === base ? "current" : ""}>
                       <span className="revision-dot" />
                       <div>
@@ -788,76 +800,6 @@ export function App() {
                   ))}
                   {!revisions.length && (
                     <p className="muted">第一个作品生成后，这里会留下记录。</p>
-                  )}
-                </div>
-              </>
-            )}
-            {panel === "chat" && (
-              <div className="chat-log">
-                {snapshot?.messages.map((m, i) => (
-                  <article key={i} className={m.role}>
-                    <small>
-                      {m.role === "user"
-                        ? "你"
-                        : m.role === "error"
-                          ? "执行反馈"
-                          : "Codex"}{" "}
-                      · {shortDate(m.createdAt)}
-                    </small>
-                    <p>{m.text}</p>
-                  </article>
-                ))}
-                {!snapshot?.messages.length && (
-                  <p className="muted">还没有对话。用一句话，开始你的创作。</p>
-                )}
-              </div>
-            )}
-            {panel === "export" && snapshot?.revision && (
-              <>
-                <p className="muted">
-                  导出已保存版本 <b>{base?.slice(0, 8)}</b>
-                  。模型包含所有已确认的网页修改。
-                </p>
-                <div className="export-options">
-                  {[
-                    [
-                      "blend",
-                      "Blender 源文件",
-                      ".blend · 完整场景，可继续编辑",
-                    ],
-                    ["glb", "通用三维模型", ".glb · 适用于网页和其他 3D 工具"],
-                  ].map(([k, title, desc]) => (
-                    <a
-                      key={k}
-                      href={`/api/artifacts/${snapshot.revision!.artifacts[k as "blend"]}?download=1`}
-                    >
-                      <Box size={24} />
-                      <span>
-                        <strong>{title}</strong>
-                        <small>{desc}</small>
-                      </span>
-                      <Download size={17} />
-                    </a>
-                  ))}
-                  {snapshot.render && !renderStale ? (
-                    <a
-                      href={`/api/artifacts/${snapshot.render.artifactId}?download=1`}
-                    >
-                      <Image size={24} />
-                      <span>
-                        <strong>渲染图像</strong>
-                        <small>.png · 1280 × 720 · 当前版本</small>
-                      </span>
-                      <Download size={17} />
-                    </a>
-                  ) : (
-                    <div className="export-unavailable">
-                      <Image size={24} />
-                      <span>
-                        PNG {renderStale ? "需要重新渲染" : "尚未渲染"}
-                        <small>关闭窗口后，点击顶部「渲染」。</small>
-                      </span>
-                    </div>
                   )}
                 </div>
               </>

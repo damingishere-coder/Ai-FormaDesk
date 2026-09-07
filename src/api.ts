@@ -18,7 +18,10 @@ export async function api<T = any>(
   if (!token) await initSession();
   const r = await fetch("/api" + url, {
     method: method || (body === undefined ? "GET" : "POST"),
-    headers: { "Content-Type": "application/json", "X-Forma-Session": token },
+    headers: {
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      "X-Forma-Session": token,
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (r.status === 401) {
@@ -27,5 +30,21 @@ export async function api<T = any>(
   }
   const v = await r.json();
   if (!r.ok) throw new Error(v.error || "请求失败");
+  return v;
+}
+
+export async function uploadAttachment<T>(pid: string, file: File): Promise<T> {
+  if (!token) await initSession();
+  const r = await fetch(`/api/projects/${pid}/attachments`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-Forma-Session": token,
+      "X-File-Name": encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  const v = await r.json();
+  if (!r.ok) throw new Error(v.error || "上传失败");
   return v;
 }
