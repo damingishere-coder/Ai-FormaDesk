@@ -60,6 +60,7 @@ export function runBlender(
   signal?: AbortSignal,
   timeout = 120000,
   rendering = false,
+  resourceLimits?: { maxFootprintMb: number },
 ) {
   const queued = blenderQueue.then(async () => {
     if (signal?.aborted) throw new Error("任务已取消");
@@ -74,7 +75,9 @@ export function runBlender(
       imagePython(),
       [
         path.join(ROOT, "scripts/image3d/resource_exec.py"),
-        "--runtime", IMAGE3D_RUNTIME, "--", "/usr/bin/sandbox-exec",
+        "--runtime", IMAGE3D_RUNTIME,
+        ...(resourceLimits ? ["--metrics", path.join(jobDir, "memory.json"), "--max-footprint-mb", String(resourceLimits.maxFootprintMb)] : []),
+        "--", "/usr/bin/sandbox-exec",
         "-f",
         profile,
         BLENDER,
