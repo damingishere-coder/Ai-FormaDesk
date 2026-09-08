@@ -400,8 +400,11 @@ export class CodexAdapter {
                     : response
               ).parse(JSON.parse(final)),
             );
-          } catch {
-            reject(new Error("Codex 未返回有效内容，未执行任何场景修改"));
+          } catch (error) {
+            const detail = contract && error instanceof z.ZodError
+              ? error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("；").slice(0, 1000)
+              : "";
+            reject(new Error("Codex 未返回有效内容，未执行任何场景修改" + (detail ? "：" + detail : "")));
           }
         }
       };

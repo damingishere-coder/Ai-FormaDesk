@@ -24,5 +24,7 @@ describe("PhotoFit acceptance boundaries", () => {
       expect(correctionSchema.safeParse({summary:"",parameters:[],operations:[{...operation,...invalid}]}).success).toBe(false);
     }
     expect(correctionSchema.safeParse({summary:"",parameters:[],operations:Array(4).fill(operation)}).success).toBe(false);
+    expect(correctionSchema.safeParse({summary:"",parameters:[],operations:[{...operation,operationType:"deform",smoothIterations:0,smoothFactor:0}]}).success).toBe(true);
+    expect(correctionSchema.safeParse({summary:"",parameters:[],operations:[{...operation,operationType:"smooth",smoothIterations:0,smoothFactor:0}]}).success).toBe(false);
   });
 });

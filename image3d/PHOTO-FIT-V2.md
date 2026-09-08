@@ -60,3 +60,8 @@ python scripts/image3d/photo_fit_report.py OUTPUT REPORT_DIRECTORY
 参考方法：[Infinigen](https://github.com/princeton-vl/infinigen) 的程序化几何、
 [LL3M](https://github.com/threedle/ll3m) 的脚本与视觉反馈。当前函数库为本项目原创，
 未复制上游代码、安装其他模型或依赖 LL3M 演示服务；推理底模和纹理锁定清单不变。
+
+可选大底模对比单独使用 `shape-large.lock.json`，不会改变现有环境检查与默认引擎。
+`shape_large_probe.py --runtime RUNTIME --install` 仅下载并校验；推理时使用
+`--image TRANSPARENT_PNG --job NEW_DIRECTORY`，禁止边推理边下载。Turbo 大底模固定
+8 步、octree 256、seed 42；其结果必须另行比较，不能将 small 的实测当作 large 的证据。

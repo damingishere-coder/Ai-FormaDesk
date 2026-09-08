@@ -16,6 +16,10 @@ export type ExperimentInput = {
   strategy: "mesh" | "script"; budgetMs?: number;
 };
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+// Capture loaded adapter sources once, rather than hashing edited disk files
+// halfway through a long batch and attributing them to already-loaded modules.
+const loadedCodeHashes = Object.fromEntries(["server/codex.ts", "server/sandbox.ts", "server/photo-fit/experiment.ts", "server/photo-fit/contracts.ts"]
+  .map(file => [file, hash(path.join(ROOT, file))]));
 const write = (file: string, value: unknown) => {
   fs.writeFileSync(file+".tmp", JSON.stringify(value, null, 2), { mode: 0o600 });
   fs.renameSync(file+".tmp", file);
@@ -35,7 +39,7 @@ export async function runPhotoFitExperiment(input: ExperimentInput, signal: Abor
     model: MODEL, effort: EFFORT, strategy: input.strategy, budgetMs: remaining,
     sourceHash: hash(input.reference), sourceBlendHash: input.blend ? hash(input.blend) : null,
     corrections: [], acceptedCategories: [], visualAcceptance: "pending", stages: [] };
-  record.codeHashes = Object.fromEntries(["blender/photo_fit_worker.py", "blender/photo_fit_geometry.py", "server/photo-fit/experiment.ts", "server/photo-fit/contracts.ts"].map(file => [file, hash(path.join(ROOT, file))]));
+  record.codeHashes = { ...loadedCodeHashes, ...Object.fromEntries(["blender/photo_fit_worker.py", "blender/photo_fit_geometry.py", "scripts/image3d/resource_exec.py"].map(file => [file, hash(path.join(ROOT, file))])) };
   const persist = () => write(path.join(directory, "experiment.json"), { ...record, remainingMs: remaining });
   const ensure = () => { refreshBudget(); signal.throwIfAborted(); if (remaining <= 0) throw new Error("达到 30 分钟执行预算，保留已验证候选"); };
   const ai = async <T>(name: string, fn: (s: AbortSignal) => Promise<T>): Promise<T> => {

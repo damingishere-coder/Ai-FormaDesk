@@ -26,14 +26,15 @@ export const correctionSchema = z.object({
     objectId: z.string().min(1), evidence: z.string().min(1), preserve: z.string().min(1),
     operationType: z.enum(["deform", "smooth"]).default("deform"),
     anchorId: z.string().nullable().default(null),
-    smoothIterations: z.number().int().min(1).max(5).default(3),
-    smoothFactor: z.number().min(.01).max(.5).default(.2),
+    smoothIterations: z.number().int().min(0).max(5).default(3),
+    smoothFactor: z.number().min(0).max(.5).default(.2),
     // Coordinates use the frozen whole-subject world bounding box, normalized 0..1.
     center: z.tuple([unit, unit, unit]),
     radius: z.tuple([z.number().min(.02).max(.65), z.number().min(.02).max(.65), z.number().min(.02).max(.65)]),
     translation: vector.refine(v => v.every(n => Math.abs(n) <= .12), "局部位移超过主体范围的 12%"),
     scale: vector.refine(v => v.every(n => n >= .65 && n <= 1.35), "局部缩放超出 0.65..1.35"),
-  }).strict()).max(3),
+  }).strict().refine(o => o.operationType !== "smooth" || (o.smoothIterations >= 1 && o.smoothFactor >= .01),
+    "平滑操作需要有效的次数和力度")).max(3),
 }).strict().refine(v => !v.parameters.length || !v.operations.length, "参数调整和网格变形必须分轮执行");
 export type Correction = z.infer<typeof correctionSchema>;
 export type Constraints = z.infer<typeof constraintsSchema>;
