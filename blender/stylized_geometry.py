@@ -13,6 +13,8 @@ def ellipsoid(name, center, radii):
     bpy.ops.mesh.primitive_uv_sphere_add(segments=32, ring_count=20, location=center)
     obj=bpy.context.object; obj.name=name; obj.scale=radii
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    mod=obj.modifiers.new('Curved source surface','SUBSURF');mod.levels=1;mod.render_levels=1
+    bpy.ops.object.modifier_apply(modifier=mod.name)
     for p in obj.data.polygons: p.use_smooth=True
     return identify(obj,name)
 
@@ -116,3 +118,88 @@ def apply_palette(meshes, plan):
         for p in obj.data.polygons:
             pos=(np.mean(pts[list(p.vertices)],axis=0)-lo)/span
             if np.linalg.norm((pos-center)/radius)<=1:p.material_index=slot
+
+
+def surface_patch(name, surface, x, z, width, height, offset=.002):
+    """A shallow elliptical mesh following the actual visible front surface, not a protruding eyeball."""
+    if surface.type!='MESH' or not np.isfinite([x,z,width,height,offset]).all() or not .002<=width<=.5 or not .002<=height<=.5 or not .0005<=offset<=.008:
+        raise ValueError('贴合曲面区域参数无效')
+    bpy.context.view_layer.update()
+    corners=[surface.matrix_world@Vector(c) for c in surface.bound_box]
+    front=min(v.y for v in corners)-1
+    inverse=surface.matrix_world.inverted();direction=(inverse.to_3x3()@Vector((0,1,0))).normalized()
+    def point(px,pz):
+        hit,loc,normal,_=surface.ray_cast(inverse@Vector((px,front,pz)),direction)
+        if not hit:raise ValueError('贴合曲面区域超出主体表面')
+        world=surface.matrix_world@loc;world.y-=offset
+        return tuple(world)
+    vertices=[point(x,z)];faces=[];segments=32;rings=5
+    for ring in range(1,rings+1):
+        t=ring/rings
+        for i in range(segments):
+            angle=2*math.pi*i/segments;vertices.append(point(x+math.cos(angle)*width*.5*t,z+math.sin(angle)*height*.5*t))
+    for i in range(segments):faces.append((0,1+i,1+(i+1)%segments))
+    for r in range(rings-1):
+        for i in range(segments):
+            a=1+r*segments+i;b=1+r*segments+(i+1)%segments
+            faces.append((a,a+segments,b+segments,b))
+    mesh=bpy.data.meshes.new(name);mesh.from_pydata(vertices,[],faces);mesh.update()
+    obj=bpy.data.objects.new(name,mesh);bpy.context.scene.collection.objects.link(obj)
+    for p in mesh.polygons:p.use_smooth=True
+    return identify(obj,name)
+
+
+def organic(name, lobes, blend=.035, resolution=80):
+    """Smooth-union ellipsoids with an explicit bounded field and marching tetrahedra.
+
+    Each lobe is {center:[x,y,z], radii:[rx,ry,rz]}. This is original code,
+    preserving a reproducible volumetric control representation on the object.
+    """
+    if not 1<=len(lobes)<=48 or not .005<=blend<=.08 or not 32<=resolution<=100:
+        raise ValueError('连续场参数超限')
+    centers=np.array([l['center'] for l in lobes],dtype=float);radii=np.array([l['radii'] for l in lobes],dtype=float)
+    if centers.shape!=(len(lobes),3) or not np.isfinite([centers,radii]).all() or radii.min()<.008 or radii.max()>2:
+        raise ValueError('连续场控制点无效')
+    low=(centers-radii).min(axis=0)-blend;high=(centers+radii).max(axis=0)+blend
+    step=float((high-low).max()/resolution);shape=np.ceil((high-low)/step).astype(int)+1
+    if np.prod(shape)>1_100_000:raise ValueError('连续场采样预算超限')
+    axes=[low[i]+np.arange(shape[i])*step for i in range(3)]
+    points=np.stack(np.meshgrid(*axes,indexing='ij'),axis=-1);field=np.full(tuple(shape),np.inf)
+    for c,r in zip(centers,radii):
+        distance=(np.linalg.norm((points-c)/r,axis=-1)-1)*float(r.min())
+        h=np.maximum(blend-np.abs(field-distance),0)/blend
+        field=np.minimum(field,distance)-h*h*blend*.25
+    offsets=np.array([(0,0,0),(1,0,0),(1,1,0),(0,1,0),(0,0,1),(1,0,1),(1,1,1),(0,1,1)])
+    signs=[field[o[0]:shape[0]-1+o[0],o[1]:shape[1]-1+o[1],o[2]:shape[2]-1+o[2]]<0 for o in offsets]
+    total=np.sum(signs,axis=0);cells=np.argwhere((total>0)&(total<8))
+    tetrahedra=[(0,5,1,6),(0,1,2,6),(0,2,3,6),(0,3,7,6),(0,7,4,6),(0,4,5,6)]
+    vertices=[];faces=[];edge_vertices={};stride=np.array([shape[1]*shape[2],shape[2],1])
+    for cell in cells:
+        grid=cell+offsets;values=field[tuple(grid.T)];ids=grid@stride
+        def edge(a,b):
+            key=tuple(sorted((int(ids[a]),int(ids[b]))))
+            if key not in edge_vertices:
+                t=float(values[a]/(values[a]-values[b]));pos=low+(grid[a]+t*(grid[b]-grid[a]))*step
+                edge_vertices[key]=len(vertices);vertices.append(tuple(pos))
+            return edge_vertices[key]
+        for tet in tetrahedra:
+            inside=[i for i in tet if values[i]<0];outside=[i for i in tet if values[i]>=0]
+            if not inside or not outside:continue
+            if len(inside)==1:faces.append(tuple(edge(inside[0],j) for j in outside))
+            elif len(outside)==1:faces.append(tuple(edge(outside[0],j) for j in inside))
+            else:
+                a,b=inside;c,d=outside;q=[edge(a,c),edge(a,d),edge(b,d),edge(b,c)]
+                faces.extend([(q[0],q[1],q[2]),(q[0],q[2],q[3])])
+    if not vertices:raise ValueError('连续场为空')
+    vertices=np.array(vertices);faces=np.array(faces,dtype=int)
+    # Orient every triangle towards the scalar field's outward gradient.
+    gradient=np.stack(np.gradient(field,step),axis=-1)
+    midpoint=vertices[faces].mean(axis=1);indices=np.clip(np.rint((midpoint-low)/step).astype(int),0,shape-1)
+    normals=np.cross(vertices[faces[:,1]]-vertices[faces[:,0]],vertices[faces[:,2]]-vertices[faces[:,0]])
+    flip=np.einsum('ij,ij->i',normals,gradient[tuple(indices.T)])<0
+    faces[flip]=faces[flip][:,[0,2,1]]
+    mesh=bpy.data.meshes.new(name);mesh.from_pydata(vertices.tolist(),[],faces.tolist());mesh.update()
+    obj=bpy.data.objects.new(name,mesh);bpy.context.scene.collection.objects.link(obj)
+    for p in mesh.polygons:p.use_smooth=True
+    obj['stylized_field']=json.dumps({'lobes':lobes,'blend':blend,'resolution':resolution})
+    return identify(obj,name)

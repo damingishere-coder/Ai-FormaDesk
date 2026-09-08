@@ -51,6 +51,19 @@ def digest(values):
     return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def canonical_faces(mesh, uv=False):
+    rows=[]
+    for face in mesh.polygons:
+        row=[]
+        for index in face.loop_indices:
+            vertex=mesh.loops[index].vertex_index
+            item=(vertex,)+tuple(float(v) for layer in mesh.uv_layers for v in layer.data[index].uv) if uv else (vertex,)
+            row.append(item)
+        start=min(range(len(row)),key=lambda i:row[i])
+        rows.append(row[start:]+row[:start])
+    return sorted(rows)
+
+
 def inventory(meshes):
     result = []
     for obj in meshes:
@@ -61,6 +74,8 @@ def inventory(meshes):
             'bounds': [[min(v[i] for v in world) for i in range(3)], [max(v[i] for v in world) for i in range(3)]],
             'coordinatesHash': hashlib.sha256(fit.coordinates(obj).tobytes()).hexdigest(),
             'topologyHash': digest([list(p.vertices) for p in obj.data.polygons]),
+            'canonicalTopologyHash': digest(canonical_faces(obj.data)),
+            'canonicalUvHash': digest(canonical_faces(obj.data,True)),
             'uvHash': digest([[tuple(v.uv) for v in layer.data] for layer in obj.data.uv_layers]),
             'transformHash': digest([list(row) for row in obj.matrix_world]),
             'materials': [m.name if m else None for m in obj.data.materials],
@@ -406,6 +421,11 @@ def main():
     if request.get('colorViews'):
         bpy.context.scene.view_layers[0].material_override=None
         bpy.context.scene.cycles.samples=16
+        # The default Blender world is nearly black. Neutral fill makes the
+        # exported base colours readable without encoding lighting into paint.
+        background=bpy.context.scene.world.node_tree.nodes.get('Background')
+        background.inputs['Color'].default_value=(.8,.8,.8,1)
+        background.inputs['Strength'].default_value=.8
         render(directory,'color-front.png')
         for name,angle in [('left',-math.pi/2),('right',math.pi/2),('back',math.pi)]:
             camera.location=center+Vector((relative.x*math.cos(angle)-relative.y*math.sin(angle),relative.x*math.sin(angle)+relative.y*math.cos(angle),relative.z))

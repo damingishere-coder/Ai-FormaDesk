@@ -23,6 +23,15 @@ while stack:
  seen.add(i);stack.extend(adj[i])
 assert len(seen)==len(adj)
 checks.append({'name':'continuous fused body; explicit eye exclusion','passed':True})
+patch=sty.surface_patch('surface_eye',body,0,.7,.06,.05)
+assert all(p.normal.y<0 for p in patch.data.polygons)
+assert max(abs((patch.matrix_world@v.co).y) for v in patch.data.vertices)<.3
+checks.append({'name':'shallow eye patch follows front surface with outward normals','passed':True})
+organic=sty.organic('organic_test',[{'center':[.5,0,.5],'radii':[.12,.1,.2]},{'center':[.5,0,.7],'radii':[.14,.1,.12]}],resolution=40)
+assert len(organic.data.vertices)>100
+import bmesh
+bm=bmesh.new();bm.from_mesh(organic.data);assert all(e.is_manifold for e in bm.edges);bm.free()
+checks.append({'name':'bounded smooth scalar field produces a closed manifold junction','passed':True})
 params={'width':1.0};rules={'width':{'kind':'proportion','min':.1,'max':2,'baseline':1.0,'targets':['body']}}
 frozen=sty.parameter_contract(params,rules);assert frozen['width']['min']==.85 and frozen['width']['max']==1.15
 for value in [1.16,float('nan')]:

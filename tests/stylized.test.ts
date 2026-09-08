@@ -1,10 +1,106 @@
-import {describe,it,expect} from 'vitest';
-import {canAccept,changedObjects,finalPassed,validateReview,featureContract,type Features,type Review} from '../server/stylized/contracts';
-const features:Features={category:'animal',preserve:Array.from({length:5},(_,i)=>({id:String(i),name:'feature',part:'body',region:[0,0,1,1],confidence:.9,visible:true,check:'shape'})),simplify:[],omit:[],uncertainties:[],proportions:[]};
-const good:Review={summary:'review',features:features.preserve.map(f=>({id:f.id,status:'pass',evidence:'seen'})),structurePassed:true,stylePassed:true,targetImproved:true,regressed:false,issues:[]};
-describe('stylized acceptance and scope',()=>{
- it('emits supported homogeneous tuple schemas',()=>{const schema=featureContract.schema as any;expect(schema.properties.preserve.items.properties.region.items.type).toBe('number');expect(schema.properties.preserve.items.properties.region.minItems).toBe(4);});
- it('does not use photo IoU as a style gate; refuses regressions and false improvement',()=>{expect(canAccept(good)).toBe(true);expect(canAccept({...good,regressed:true})).toBe(false);expect(canAccept({...good,targetImproved:false})).toBe(false);expect(canAccept({...good,structurePassed:false})).toBe(false);});
- it('requires every visible reliable identity feature for final acceptance',()=>{expect(finalPassed(features,good)).toBe(true);expect(finalPassed(features,{...good,features:good.features.map((f,i)=>i?f:{...f,status:'uncertain'})})).toBe(false);expect(()=>validateReview(features,{...good,features:Array(5).fill(good.features[0])})).toThrow();});
- it('rejects collateral parameter edits and changed object identities',()=>{const a=[{name:'body',objectId:'a',coordinatesHash:'1'},{name:'eye',objectId:'b',coordinatesHash:'2'}];expect(changedObjects(a,[{...a[0],coordinatesHash:'3'},a[1]],['body'])).toEqual(['body']);expect(()=>changedObjects(a,[a[0],{...a[1],coordinatesHash:'3'}],['body'])).toThrow('非目标');expect(()=>changedObjects(a,[{...a[0],objectId:'z'},a[1]],['body'])).toThrow('ID');});
+import { describe, it, expect } from "vitest";
+import {
+  canAccept,
+  changedObjects,
+  finalPassed,
+  validateReview,
+  featureContract,
+  type Features,
+  type Review,
+} from "../server/stylized/contracts";
+const features: Features = {
+  category: "animal",
+  preserve: Array.from({ length: 5 }, (_, i) => ({
+    id: String(i),
+    name: "feature",
+    part: "body",
+    region: [0, 0, 1, 1],
+    confidence: 0.9,
+    visible: true,
+    check: "shape",
+  })),
+  simplify: [],
+  omit: [],
+  uncertainties: [],
+  proportions: [],
+};
+const good: Review = {
+  summary: "review",
+  features: features.preserve.map((f) => ({
+    id: f.id,
+    status: "pass",
+    evidence: "seen",
+  })),
+  structurePassed: true,
+  stylePassed: true,
+  targetImproved: true,
+  regressed: false,
+  issues: [],
+};
+describe("stylized acceptance and scope", () => {
+  it("emits supported homogeneous tuple schemas", () => {
+    const schema = featureContract.schema as any;
+    expect(schema.properties.preserve.items.properties.region.items.type).toBe(
+      "number",
+    );
+    expect(schema.properties.preserve.items.properties.region.minItems).toBe(4);
+  });
+  it("does not use photo IoU as a style gate; refuses regressions and false improvement", () => {
+    expect(canAccept(good)).toBe(true);
+    expect(canAccept({ ...good, regressed: true })).toBe(false);
+    expect(canAccept({ ...good, targetImproved: false })).toBe(false);
+    expect(canAccept({ ...good, structurePassed: false })).toBe(true);
+    expect(finalPassed(features, { ...good, structurePassed: false })).toBe(
+      false,
+    );
+  });
+  it("requires every visible reliable identity feature for final acceptance", () => {
+    expect(finalPassed(features, good)).toBe(true);
+    expect(
+      finalPassed(features, {
+        ...good,
+        features: good.features.map((f, i) =>
+          i ? f : { ...f, status: "uncertain" },
+        ),
+      }),
+    ).toBe(false);
+    expect(() =>
+      validateReview(features, {
+        ...good,
+        features: Array(5).fill(good.features[0]),
+      }),
+    ).toThrow();
+  });
+  it("accepts face ordering changes only when canonical topology and per-corner UV agree", () => {
+    const a = {
+      name: "body",
+      objectId: "a",
+      coordinatesHash: "1",
+      topologyHash: "raw1",
+      uvHash: "uv1",
+      canonicalTopologyHash: "topo",
+      canonicalUvHash: "uv",
+    };
+    expect(
+      changedObjects([a], [{ ...a, topologyHash: "raw2", uvHash: "uv2" }], []),
+    ).toEqual([]);
+    expect(() =>
+      changedObjects([a], [{ ...a, canonicalUvHash: "changed" }], []),
+    ).toThrow("非目标");
+  });
+  it("rejects collateral parameter edits and changed object identities", () => {
+    const a = [
+      { name: "body", objectId: "a", coordinatesHash: "1" },
+      { name: "eye", objectId: "b", coordinatesHash: "2" },
+    ];
+    expect(
+      changedObjects(a, [{ ...a[0], coordinatesHash: "3" }, a[1]], ["body"]),
+    ).toEqual(["body"]);
+    expect(() =>
+      changedObjects(a, [a[0], { ...a[1], coordinatesHash: "3" }], ["body"]),
+    ).toThrow("非目标");
+    expect(() =>
+      changedObjects(a, [{ ...a[0], objectId: "z" }, a[1]], ["body"]),
+    ).toThrow("ID");
+  });
 });
