@@ -1,0 +1,39 @@
+import fs from "node:fs";
+import path from "node:path";
+import { runBlender } from "../../server/sandbox";
+import { ROOT } from "../../server/config";
+import { codex } from "../../server/codex";
+import { proposalContract } from "../../server/stylized/contracts";
+const dir = path.resolve(process.argv[2]);
+fs.mkdirSync(dir, { recursive: false });
+const signal = AbortSignal.timeout(240000);
+const run = async (name: string) => {
+  const r = await runBlender(
+    dir,
+    ["--python", path.join(ROOT, "blender/stylized_known_error.py"), "--", dir],
+    signal,
+    120000,
+    true,
+    { maxFootprintMb: 12288 },
+  );
+  fs.writeFileSync(path.join(dir, name + ".log"), r.stdout + r.stderr);
+  if (r.code) throw new Error(r.stderr.slice(-1600));
+};
+try {
+  await run("prepare");
+  const proposal = await codex.structured(
+    "stylized-known-error",
+    `第1张目标参考，第2张当前灰模。只有width参数可修改，当前0.86，范围0.85..1.15，基准1.0，作用部件body。比较实际图像，纠正已知的横向比例错误，保持前方圆标记badge不变，不通过改相机修正。`,
+    signal,
+    [path.join(dir, "reference.png"), path.join(dir, "wrong.png")],
+    proposalContract,
+  );
+  fs.writeFileSync(
+    path.join(dir, "proposal.json"),
+    JSON.stringify(proposal, null, 2),
+  );
+  await run("verify");
+  console.log(fs.readFileSync(path.join(dir, "known-error.json"), "utf8"));
+} finally {
+  codex.close();
+}

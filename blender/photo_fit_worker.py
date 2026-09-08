@@ -18,6 +18,7 @@ from bpy_extras.object_utils import world_to_camera_view
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import photo_fit_geometry as fit
+import stylized_geometry as sty
 
 
 def write(directory, name, value):
@@ -50,6 +51,19 @@ def digest(values):
     return hashlib.sha256(json.dumps(values, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def canonical_faces(mesh, uv=False):
+    rows=[]
+    for face in mesh.polygons:
+        row=[]
+        for index in face.loop_indices:
+            vertex=mesh.loops[index].vertex_index
+            item=(vertex,)+tuple(float(v) for layer in mesh.uv_layers for v in layer.data[index].uv) if uv else (vertex,)
+            row.append(item)
+        start=min(range(len(row)),key=lambda i:row[i])
+        rows.append(row[start:]+row[:start])
+    return sorted(rows)
+
+
 def inventory(meshes):
     result = []
     for obj in meshes:
@@ -60,6 +74,8 @@ def inventory(meshes):
             'bounds': [[min(v[i] for v in world) for i in range(3)], [max(v[i] for v in world) for i in range(3)]],
             'coordinatesHash': hashlib.sha256(fit.coordinates(obj).tobytes()).hexdigest(),
             'topologyHash': digest([list(p.vertices) for p in obj.data.polygons]),
+            'canonicalTopologyHash': digest(canonical_faces(obj.data)),
+            'canonicalUvHash': digest(canonical_faces(obj.data,True)),
             'uvHash': digest([[tuple(v.uv) for v in layer.data] for layer in obj.data.uv_layers]),
             'transformHash': digest([list(row) for row in obj.matrix_world]),
             'materials': [m.name if m else None for m in obj.data.materials],
@@ -327,6 +343,11 @@ def main():
             except (ValueError, TypeError): pass
         exposed = {k: {'value':v, 'min':v-max(abs(v)*.35,.025), 'max':v+max(abs(v)*.35,.025), 'integer':isinstance(v,int)}
                    for k,v in params.items() if isinstance(k,str) and isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v)}
+        if request.get('stylized'):
+            rule_nodes=[n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='PARAM_RULES' for t in n.targets)]
+            if len(rule_nodes)!=1: raise ValueError('需要字面量 PARAM_RULES')
+            rules=ast.literal_eval(rule_nodes[0].value)
+            exposed=sty.parameter_contract(params,rules,request.get('frozenParameters'))
         updates = request.get('parameters', {})
         if len(updates)>3: raise ValueError('每轮最多调整三个参数')
         for key,value in updates.items():
@@ -338,7 +359,8 @@ def main():
         if updates:
             declarations[0].value=ast.parse(repr(params), mode='eval').body
             ast.fix_missing_locations(tree)
-        exec(compile(tree, 'generated.py', 'exec'), {'bpy': bpy, 'fit': fit, '__name__': '__main__'})
+        exec(compile(tree, 'generated.py', 'exec'), {'bpy': bpy, 'fit': fit, 'sty':sty, '__name__': '__main__'})
+        if request.get('stylized'): sty.validate_targets(exposed)
         for obj in bpy.context.scene.objects:
             if obj.name in request.get('identities', {}): obj['forma_id']=request['identities'][obj.name]
         write(directory, 'parameters.json', {k:{**v,'value':params[k]} for k,v in exposed.items()})
@@ -358,6 +380,12 @@ def main():
     before = inventory(meshes)
     box = request.get('bounds') or bounds(meshes)
     changes = []
+    if mode=='palette':
+        sty.apply_palette(meshes,request['palette'])
+        after=inventory(meshes)
+        for a,b in zip(before,after):
+            for key in ('objectId','coordinatesHash','topologyHash','uvHash','transformHash','modifiers'):
+                if a[key]!=b[key]:raise ValueError('上色破坏几何：'+key)
     if mode == 'correct':
         changes = fit.apply_local_operations(meshes, request['operations'], box, request.get('strength', 1))
         after = inventory(objects())
@@ -390,6 +418,21 @@ def main():
         camera.data.shift_x = camera.data.shift_y = 0
         render(directory, name+'.png')
     set_camera(camera, fixed)
+    if request.get('colorViews'):
+        bpy.context.scene.view_layers[0].material_override=None
+        bpy.context.scene.cycles.samples=16
+        # The default Blender world is nearly black. Neutral fill makes the
+        # exported base colours readable without encoding lighting into paint.
+        background=bpy.context.scene.world.node_tree.nodes.get('Background')
+        background.inputs['Color'].default_value=(.8,.8,.8,1)
+        background.inputs['Strength'].default_value=.8
+        render(directory,'color-front.png')
+        for name,angle in [('left',-math.pi/2),('right',math.pi/2),('back',math.pi)]:
+            camera.location=center+Vector((relative.x*math.cos(angle)-relative.y*math.sin(angle),relative.x*math.sin(angle)+relative.y*math.cos(angle),relative.z))
+            camera.rotation_euler=(center-camera.location).to_track_quat('-Z','Y').to_euler()
+            camera.data.shift_x=camera.data.shift_y=0
+            render(directory,'color-'+name+'.png')
+        set_camera(camera,fixed)
     preview=export_preview(directory,meshes,actual)
     write(directory, 'report.json', {'metrics': metrics, 'camera': fixed, 'bounds': box,
         'objects': inventory(meshes), 'changes': changes, 'geometryValid': True,

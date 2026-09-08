@@ -1,0 +1,11 @@
+{
+ "version":1,"implementation":"original Blender functions; no upstream source copied",
+ "references":[
+  {"project":"img2threejs","url":"https://github.com/img2threejs/img2threejs","commit":"6e60b5e22419464b4853e01ddb6c0e6f6659a733","use":"method reference: feature inventory, style-specific proportions","codeReused":false},
+  {"project":"Dust3D","url":"https://github.com/huxingyi/dust3d","commit":"44b4503d93198a1cab493f936e53d875d8f7848b","use":"method reference: node radii and continuous shape","codeReused":false},
+  {"project":"Procedura","url":"https://github.com/SpatiaOS/Procedura","commit":"fac191ed49f55fcc2e0f23897e986042249f59fe","use":"method reference: named part dependencies","codeReused":false},
+  {"project":"Geometry in Style","url":"https://github.com/threedle/geometry-in-style","use":"research only; no CUDA integration","codeReused":false},
+  {"project":"GeoStyle","url":"https://github.com/changwoonchoi/GeoStyle","use":"research only; no CUDA integration","codeReused":false}
+ ],
+ "runtime":"existing Blender 4.5 and Codex authentication; no new model dependencies"
+}

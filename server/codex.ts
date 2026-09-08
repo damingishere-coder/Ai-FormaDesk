@@ -54,7 +54,7 @@ const instructions = `你是 Ai-FormaDesk 的 Blender 4.5 LTS Python 建模器�
 export class CodexAdapter {
   /** Trusted callers own the schema/instructions; photo contents never select tools. */
   async structured<T>(projectId: string, prompt: string, signal: AbortSignal,
-    imagePaths: string[], contract: { instructions: string; schema: Record<string, unknown>; parse: (v: unknown) => T }) {
+    imagePaths: string[], contract: { instructions: string; schema: Record<string, unknown>; parse: (v: unknown) => T; timeoutMs?: number }) {
     return contract.parse(await this.runTurn(projectId, null, prompt, signal,
       () => {}, () => {}, imagePaths, false, false, false, contract));
   }
@@ -306,7 +306,7 @@ export class CodexAdapter {
     discussion: boolean,
     analyze = false,
     review = false,
-    contract?: { instructions: string; schema: Record<string, unknown>; parse: (v: unknown) => unknown },
+    contract?: { instructions: string; schema: Record<string, unknown>; parse: (v: unknown) => unknown; timeoutMs?: number },
   ) {
     await this.start();
     const cwd = path.join(
@@ -367,11 +367,12 @@ export class CodexAdapter {
         cleanup();
         reject(new Error("Codex App Server 连接中断"));
       };
+      const timeoutMs = Math.min(1800000, Math.max(1, contract?.timeoutMs ?? 600000));
       const timer = setTimeout(() => {
         stop();
         cleanup();
-        reject(new Error("AI 生成超过 10 分钟，已停止"));
-      }, 600000);
+        reject(new Error(`AI 生成超过 ${Math.round(timeoutMs / 60000 * 10) / 10} 分钟，已停止`));
+      }, timeoutMs);
       const event = (m: any) => {
         const p = m.params;
         if (p?.threadId !== tid) return;
