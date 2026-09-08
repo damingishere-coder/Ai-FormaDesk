@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "experimental": true,
+  "reserveBytes": 10737418240,
+  "license": "Tencent Hunyuan3D-2 Community License",
+  "licenseUrl": "https://huggingface.co/tencent/Hunyuan3D-2/blob/main/LICENSE.txt",
+  "sourceCommit": "292331f4d26ddb80b9dcea6bcb5629ff82f12b82",
+  "defaults": { "steps": 8, "octree": 256, "seed": 42 },
+  "weights": [
+    { "name": "shape-large", "repo": "zimengxiong/hunyuan3d-mlx-shape-large", "revision": "5ad04593521ff80875ac007ef8185209368f18bc", "file": "config.yaml", "path": "shape-large/config.yaml", "size": 1663, "sha256": "4712421fe32d57c678be3be2b608acdb8871985f0b81646a883d136abc63feb7" },
+    { "name": "shape-large", "repo": "zimengxiong/hunyuan3d-mlx-shape-large", "revision": "5ad04593521ff80875ac007ef8185209368f18bc", "file": "model.fp16.safetensors", "path": "shape-large/model.fp16.safetensors", "size": 4930777530, "sha256": "5ee5a81e4df08a1c65b79910bf5b145a90376e526794f4607a4d5d068d62f269" },
+    { "name": "shape-large", "repo": "zimengxiong/hunyuan3d-mlx-shape-large", "revision": "5ad04593521ff80875ac007ef8185209368f18bc", "file": "README.md", "path": "shape-large/README.md", "size": 1741, "sha256": "4bc56fa78e31fdd2ab6e1d148fe8999a11395774ee015bd9d91d4c38d1131ed5" }
+  ]
+}
