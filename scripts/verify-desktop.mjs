@@ -34,7 +34,13 @@ async function launch() {
       ? { executablePath: process.env.FORMA_DESKTOP_EXECUTABLE, args: [] }
       : { args: [root] }),
     cwd: root,
-    env: { ...process.env, FORMA_DESKTOP_TEST_HOME: home },
+    env: {
+      ...process.env,
+      FORMA_DESKTOP_TEST_HOME: home,
+      ...(process.env.FORMA_DESKTOP_MINIMAL_PATH
+        ? { PATH: "/usr/bin:/bin" }
+        : {}),
+    },
     timeout: 45000,
   });
   const page = await instance.firstWindow();

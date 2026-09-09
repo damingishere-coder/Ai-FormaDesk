@@ -298,7 +298,7 @@ async function startBackend() {
   });
   const env = {
     ...process.env,
-    PATH: executablePath(),
+    PATH: path.join(runtime, "bin") + path.delimiter + executablePath(),
     NODE_ENV: "production",
     ZAOWU_DATA_DIR: dataDir,
     ZAOWU_PORT: "0",
