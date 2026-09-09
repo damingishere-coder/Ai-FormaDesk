@@ -413,7 +413,9 @@ else {
         applicationName: "Ai-FormaDesk",
         applicationVersion: app.getVersion(),
         copyright: "A local workspace for shaping ideas.",
-        iconPath: path.join(__dirname, "assets/icon.png"),
+        iconPath: app.isPackaged
+          ? path.join(process.resourcesPath, "icon.png")
+          : path.join(__dirname, "assets/icon.png"),
       });
       configureSession();
       menu();

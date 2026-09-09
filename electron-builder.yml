@@ -7,6 +7,8 @@ files:
   - "**/*"
   - "!node_modules/**/*"
 extraResources:
+  - from: desktop/assets/icon.png
+    to: icon.png
   - from: build/desktop-runtime
     to: runtime
     filter:
