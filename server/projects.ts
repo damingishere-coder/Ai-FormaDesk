@@ -1,3 +1,6 @@
+import { blenderBridge } from "./blender-mcp";
+import { videoUploads } from "./videos";
+import { savedCover } from "./covers";
 import fs from "node:fs";
 import path from "node:path";
 import { DATA } from "./config";
@@ -5,7 +8,6 @@ import {
   activeJob,
   db,
   invalidateProposals,
-  latestRender,
   list,
   now,
   project,
@@ -18,22 +20,20 @@ export function projectLibrary(trash = false) {
     .filter((p) => !!p.deletedAt === trash)
     .map((p) => {
       const revisions = list<Revision>("revision", p.id);
-      const render = latestRender(p.id);
       return {
         ...p,
         updatedAt: p.updatedAt || revisions.at(-1)?.createdAt || p.createdAt,
         activeJob: activeJob(p.id),
-        coverUrl:
-          render?.revisionId === p.currentRevisionId
-            ? `/api/artifacts/${render.artifactId}`
-            : null,
+        coverUrl: savedCover(p.id, p.currentRevisionId),
       };
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 export function trashProject(id: string, restore = false) {
   const p = project(id, true);
-  if (activeJob(id))
+  if (blenderBridge.matches(id))
+    throw new Error("请先同步或另存 Blender 修改并断开连接，再移除作品");
+  if (activeJob(id) || videoUploads.has(id))
     throw Object.assign(new Error("作品正在执行任务，请先等待完成或停止任务"), {
       statusCode: 409,
     });
@@ -50,7 +50,9 @@ export function trashProject(id: string, restore = false) {
 }
 export function purgeProject(id: string) {
   const p = project(id, true);
-  if (!p.deletedAt || activeJob(id))
+  if (blenderBridge.matches(id))
+    throw new Error("请先同步或另存 Blender 修改并断开连接，再移除作品");
+  if (!p.deletedAt || activeJob(id) || videoUploads.has(id))
     throw Object.assign(new Error("请先将空闲作品移入回收站"), {
       statusCode: 409,
     });
@@ -60,6 +62,8 @@ export function purgeProject(id: string) {
       ...list<Revision>("revision", id).map((r) => ["revisions", r.id]),
       ...list<Job>("job", id).map((j) => ["jobs", j.id]),
       ["attachments", id],
+      ["videos", id],
+      ["covers", id],
       ["codex-workspaces", id],
       ["discussion-workspaces", id],
     ];

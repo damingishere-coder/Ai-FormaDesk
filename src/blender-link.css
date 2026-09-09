@@ -1,0 +1,74 @@
+.blender-link {
+  position: relative;
+}
+.blender-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #64987a;
+}
+.blender-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 12px);
+  width: min(360px, 85vw);
+  padding: 20px;
+  background: #fff;
+  border: 1px solid #dce2dd;
+  border-radius: 18px;
+  box-shadow: 0 14px 45px #17251e20;
+  z-index: 70;
+  line-height: 1.65;
+}
+.blender-popover p {
+  margin: 10px 0;
+  color: #69786f;
+  font-size: 13px;
+}
+.blender-popover small {
+  display: block;
+  font-size: 12px;
+  color: #78867d;
+  margin-top: 12px;
+}
+.blender-link-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.blender-popover img {
+  width: 100%;
+  margin-top: 12px;
+  border-radius: 10px;
+}
+.blender-popover .blender-warning {
+  color: #956321;
+}
+.build-step-times {
+  font-size: 12px;
+  color: #718076;
+  margin: 12px 0;
+}
+.build-step-times p {
+  margin: 5px 0;
+}
+
+.blender-popover form {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+.blender-popover label {
+  font-size: 12px;
+  color: #66766b;
+}
+.blender-popover input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #dce2dd;
+  border-radius: 8px;
+  padding: 9px;
+  margin-top: 5px;
+  background: #f8faf8;
+}

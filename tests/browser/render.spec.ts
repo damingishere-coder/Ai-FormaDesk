@@ -38,7 +38,7 @@ test("已保存真实场景的渲染、导出、失效提示与变换控件", as
   )!;
   await page.getByRole("button", { name: /^场景 ·/ }).click();
   await page.locator(`[data-object-id="${lamp.id}"]`).click();
-  await page.getByRole("button", { name: "关闭场景列表" }).click();
+  await page.getByRole("button", { name: "关闭场景列表", exact: true }).click();
   await page.getByRole("button", { name: "应用并保存" }).click();
   await expect
     .poll(async () => (await snap()).project.currentRevisionId)
@@ -73,10 +73,8 @@ test("已保存真实场景的渲染、导出、失效提示与变换控件", as
   const pending = page.waitForResponse(
     (r) => r.url().endsWith("/render") && r.request().method() === "POST",
   );
-  await page.getByRole("button", { name: "渲染出图", exact: true }).click();
-  await page
-    .getByRole("button", { name: "按当前视角渲染", exact: true })
-    .click();
+  await page.getByRole("button", { name: "导出", exact: true }).click();
+  await page.getByRole("button", { name: "生成图片", exact: true }).click();
   const j = (await (await pending).json()) as Job;
   await expect
     .poll(
@@ -100,17 +98,22 @@ test("已保存真实场景的渲染、导出、失效提示与变换控件", as
     timeout: 15000,
   });
   await page.getByRole("button", { name: "关闭成品图" }).click();
+  await page.getByRole("button", { name: "返回工作台", exact: true }).click();
   await page.getByRole("button", { name: "导出", exact: true }).click();
   for (const title of ["Blender 源文件", "通用三维模型", "下载原图"]) {
     if (title === "下载原图")
-      await page.getByRole("button", { name: "效果图", exact: true }).click();
+      await page.getByRole("tab", { name: "图片", exact: true }).click();
+    else {
+      await page.getByRole("tab", { name: "模型", exact: true }).click();
+      await page.getByRole("radio", { name: new RegExp(title) }).check();
+    }
     const pending = page.waitForEvent("download");
-    await page.getByRole("link").filter({ hasText: title }).click();
+    await page.getByRole("link").filter({ hasText: title === "下载原图" ? title : "下载模型" }).click();
     const download = await pending;
     await download.saveAs(path.join(evidence, download.suggestedFilename()));
     expect(await download.failure()).toBe(null);
   }
-  await page.getByRole("button", { name: "关闭导出" }).click();
+  await page.getByRole("button", { name: "返回工作台", exact: true }).click();
   fs.writeFileSync(
     path.join(evidence, "final-scene.json"),
     JSON.stringify(s, null, 2),
@@ -118,7 +121,7 @@ test("已保存真实场景的渲染、导出、失效提示与变换控件", as
   await page.getByRole("button", { name: "编辑", exact: true }).click();
   await page.getByRole("button", { name: /^场景 ·/ }).click();
   await page.locator(`[data-object-id="${lamp.id}"]`).click();
-  await page.getByRole("button", { name: "关闭场景列表" }).click();
+  await page.getByRole("button", { name: "关闭场景列表", exact: true }).click();
   await page.getByRole("button", { name: "应用并保存" }).click();
   await expect
     .poll(async () => (await snap()).project.currentRevisionId)
@@ -126,7 +129,9 @@ test("已保存真实场景的渲染、导出、失效提示与变换控件", as
   const changed = await settle();
   await page.getByRole("button", { name: "预览", exact: true }).click();
   await page.getByRole("button", { name: "查看成品图", exact: true }).click();
-  await expect(page.locator(".render-caption")).toContainText("需要重新渲染");
+  await expect(page.locator(".render-preview-warning")).toContainText(
+    "需要重新渲染",
+  );
   const r = await page.request.post(`/api/projects/${pid}/restore`, {
     headers,
     data: {

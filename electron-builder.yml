@@ -1,0 +1,53 @@
+appId: com.formadesk.desktop
+productName: Ai-FormaDesk
+asar: true
+electronDist: node_modules/electron/dist
+npmRebuild: false
+afterPack: scripts/verify-packaged-runtime.cjs
+files:
+  - "**/*"
+  - "!node_modules/**/*"
+extraResources:
+  - from: desktop/assets/icon.png
+    to: icon.png
+  - from: build/desktop-runtime
+    to: runtime
+    filter:
+      - "**/*"
+      - "!**/.DS_Store"
+  # electron-builder excludes a source root's node_modules from generic copies.
+  # Copy that directory explicitly so the backend never borrows checkout packages.
+  - from: build/desktop-runtime/node_modules
+    to: runtime/node_modules
+    filter:
+      - "**/*"
+      - "!**/.DS_Store"
+directories:
+  app: desktop
+  output: release
+  buildResources: desktop/assets
+mac:
+  category: public.app-category.graphics-design
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  icon: desktop/assets/icon.icns
+  identity: "-"
+  hardenedRuntime: false
+  minimumSystemVersion: "13.0"
+  extendInfo:
+    NSHighResolutionCapable: true
+    NSHumanReadableCopyright: Ai-FormaDesk contributors
+dmg:
+  title: Ai-FormaDesk 1.0
+  contents:
+    - x: 170
+      y: 190
+    - x: 450
+      y: 190
+      type: link
+      path: /Applications
+artifactName: Ai-FormaDesk-${version}-macOS-${arch}.${ext}
+publish: null

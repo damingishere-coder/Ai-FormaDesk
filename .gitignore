@@ -7,3 +7,10 @@ data/
 playwright-report/
 test-results/
 coverage/
+
+# Desktop build and installer output
+build/
+release/
+
+__pycache__/
+*.pyc

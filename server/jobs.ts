@@ -1,3 +1,7 @@
+import { interpretBlenderEdit } from "./blender-edit";
+import { blenderBridge } from "./blender-mcp";
+import { ownedVideo, renderVideo } from "./videos";
+import { estimateJob, stageIndex } from "../src/progress";
 import fs from "node:fs";
 import path from "node:path";
 import { EventEmitter } from "node:events";
@@ -6,6 +10,9 @@ import { runBlender } from "./sandbox";
 import { assertExecution, environment } from "./environment";
 import { codex } from "./codex";
 import { attachmentPath, validateAttachments } from "./attachments";
+import { runVisualPipeline } from "./visual-pipeline";
+import { archiveVisual } from "./visual-archive";
+import { optimizePreview } from "./preview-optimize";
 import {
   db,
   put,
@@ -62,8 +69,24 @@ export function artifactPath(id: string) {
 }
 function update(j: Job, values: Partial<Job>) {
   Object.assign(j, values, { updatedAt: now() });
-  if (values.stage)
-    j.events = [...(j.events || []), { stage: values.stage, at: now() }];
+  if (values.stage) {
+    if (values.message === undefined) j.message = "";
+    const previous = j.events?.at(-1);
+    if (previous && !previous.endedAt) previous.endedAt = now();
+    if (!["failed", "cancelled"].includes(j.status))
+      j.stageIndex = stageIndex(values.stage);
+    j.events = [
+      ...(j.events || []),
+      {
+        stage: values.stage,
+        at: now(),
+        index: j.stageIndex,
+        attempt: j.attempt,
+        error: values.error || undefined,
+      },
+    ];
+    if (j.type === "generate") j.estimate = estimateJob(j, list<Job>("job"));
+  }
   put("job", j);
   jobEvents.emit(j.id, j);
 }
@@ -74,7 +97,7 @@ export function assertBase(pid: string, base: string | null) {
       new Error("版本已更新，请刷新后重试；本次操作未覆盖当前版本。"),
       { statusCode: 409 },
     );
-  if (activeJob(pid))
+  if (activeJob(pid, false))
     throw Object.assign(new Error("当前项目正在保存或执行任务，请等待完成。"), {
       statusCode: 409,
     });
@@ -115,6 +138,7 @@ export async function executeScene(
   mode: "execute" | "command",
   signal: AbortSignal,
   onStage: (s: string) => void,
+  quality: "basic" | "detail" = "detail",
 ) {
   onStage("执行建模");
   const r = await runBlender(
@@ -128,19 +152,67 @@ export async function executeScene(
     r.stdout + "\n" + r.stderr,
   );
   if (r.code !== 0) throw new Error((r.stderr + "\n" + r.stdout).slice(-4500));
-  onStage("验证场景与更新预览");
-  const v = await runBlender(
+  onStage(quality === "basic" ? "校验文件与生成基础预览" : "校验文件与生成预览细节");
+  return validateScene(dir, signal, quality);
+}
+export async function validateScene(dir: string, signal: AbortSignal, quality: "basic" | "detail" = "detail", budgetSeconds = 600) {
+  let v;
+  try { v = await runBlender(
     dir,
-    ["--python", path.join(ROOT, "blender/worker.py"), "--", "validate", dir],
+    ["--python", path.join(ROOT, "blender/worker.py"), "--", "validate", dir, quality, String(budgetSeconds)],
     signal,
-    limits().modelingMs,
-  );
+    quality === "basic" ? 60000 : (budgetSeconds + 30) * 1000,
+    true,
+  ); } catch (error) {
+    const e = error as Error & { stdout?: string; stderr?: string };
+    fs.appendFileSync(path.join(dir, "execution.log"), (e.stdout || "") + "\n" + (e.stderr || "") + "\n" + e.message);
+    throw error;
+  }
   fs.appendFileSync(
     path.join(dir, "execution.log"),
     v.stdout + "\n" + v.stderr,
   );
   if (v.code !== 0) throw new Error((v.stderr + "\n" + v.stdout).slice(-4500));
   return checkFiles(dir);
+}
+
+function sceneStage(j: Job, dir: string, stage: string) {
+  const raw = path.join(dir, "raw.blend");
+  if (!j.savedBlendArtifactId && fs.existsSync(raw)) {
+    update(j, { savedBlendArtifactId: artifact(raw, j.projectId, "已生成模型.blend", "application/x-blender"), recoverablePreview: true });
+  }
+  update(j, { stage });
+}
+
+async function finishPreview(j: Job, dir: string, signal: AbortSignal, resumeJobId?: string) {
+  const r = revision(j.baseRevisionId!);
+  if (r.projectId !== j.projectId) throw new Error("预览不属于当前作品");
+  fs.copyFileSync(artifactPath(r.artifacts.blend), path.join(dir, "raw.blend"));
+  const previous = resumeJobId ? get<Job>("job", resumeJobId) : undefined;
+  if (previous && (previous.projectId !== j.projectId || previous.baseRevisionId !== r.id || previous.type !== "preview")) throw new Error("不能复用其他版本的贴图");
+  if (previous) {
+    const cache = path.join(DATA, "jobs", previous.id, "attempt-0", "textures");
+    if (fs.existsSync(cache)) fs.cpSync(cache, path.join(dir, "textures"), { recursive: true });
+  }
+  put("revision", { ...r, preview: { status: "processing", jobId: j.id } });
+  update(j, { stage: "生成预览细节", resultRevisionId: r.id, message: "基础预览已保存，正在处理表面细节。" });
+  try {
+    await validateScene(dir, signal, "detail", 120);
+    update(j, { stage: "压缩预览贴图", message: "表面细节已生成，正在无损压缩贴图。" });
+    const optimized = path.join(dir, "optimized.glb");
+    await optimizePreview(path.join(dir, "scene.glb"), optimized, signal);
+    if (signal.aborted) throw new Error("任务已取消");
+    if (project(j.projectId).currentRevisionId !== r.id) throw new Error("版本已变化，未覆盖新版本的预览");
+    const glb = optimized;
+    fs.chmodSync(glb, 0o400);
+    const glbId = artifact(glb, j.projectId, "细节预览.glb", "model/gltf-binary");
+    put("revision", { ...revision(r.id), artifacts: { ...r.artifacts, glb: glbId }, preview: { status: "ready", jobId: j.id } });
+    update(j, { status: "succeeded", stage: "预览细节已完成", message: "预览细节已更新，原始模型保持不变。" });
+  } catch (error) {
+    const message = (error as Error).message;
+    put("revision", { ...revision(r.id), preview: { status: "failed", jobId: j.id, error: message } });
+    update(j, { status: signal.aborted ? "cancelled" : "failed", stage: "模型已保存，预览细节未完成", error: message, recoverablePreview: true });
+  }
 }
 export function enqueue(
   pid: string,
@@ -150,7 +222,9 @@ export function enqueue(
 ) {
   if (type !== "discuss") assertExecution();
   const p = assertBase(pid, base);
-  if (["generate", "discuss"].includes(type) && !environment.codex.ok)
+  if (type === "preview" && activeJob(pid)) throw new Error("预览任务正在执行，请等待完成");
+  if (["generate", "discuss"].includes(type)) validateAttachments(pid, payload.attachmentIds || []);
+  if (["generate", "discuss"].includes(type) && !payload.resumeRawJobId && !environment.codex.ok)
     throw Object.assign(
       new Error(environment.codex.error || "Codex 暂不可用，请检查登录和模型"),
       { statusCode: 503 },
@@ -163,13 +237,22 @@ export function enqueue(
     throw Object.assign(new Error("选中对象不在当前版本中"), {
       statusCode: 400,
     });
+  if (type !== "preview") {
+    for (const previous of list<Job>("job", pid))
+      if (previous.type === "preview" && ["running", "queued"].includes(previous.status)) cancel(previous.id);
+  }
   const j: Job = {
+    request: type === "generate" ? { prompt: payload.prompt, attachmentIds: payload.attachmentIds || [], objectId: payload.objectId || null, proposalId: payload.proposalId } : undefined,
     id: uid(),
     projectId: pid,
     baseRevisionId: base,
     type,
     status: "queued",
     stage: "排队等待",
+    stageIndex: 0,
+    title: payload.proposalId
+      ? get<Proposal>("proposal", payload.proposalId)?.title
+      : payload.prompt?.slice(0, 100),
     error: null,
     resultRevisionId: null,
     createdAt: now(),
@@ -181,13 +264,16 @@ export function enqueue(
   const ctrl = new AbortController();
   controllers.set(j.id, ctrl);
   queuedPayloads.set(j.id, payload);
-  if (type === "generate")
+  if (type === "blender-edit") addMessage(pid, "user", payload.prompt, { jobId: j.id });
+  if (type === "generate") {
+    for (const a of validateAttachments(pid, payload.attachmentIds || [])) put("attachment", { ...a, used: true });
     addMessage(
       pid,
       "user",
       payload.proposalId ? "执行方案：" + payload.prompt : payload.prompt,
       { jobId: j.id },
     );
+  }
   if (type === "discuss") {
     invalidateProposals(pid);
     const images = validateAttachments(pid, payload.attachmentIds || []);
@@ -253,7 +339,7 @@ async function perform(
       if (signal.aborted) throw new Error("任务已取消");
       let proposalId: string | undefined;
       if (result.proposal) {
-        const chosen = result.proposal.attachmentIds;
+        const chosen = result.proposal.attachmentIds.length ? result.proposal.attachmentIds : result.buildNow ? imageIds : [];
         if (chosen.some((id) => !imageIds.includes(id)))
           throw new Error("方案引用了本轮不可见的图片，请重新整理方案");
         proposalId = uid();
@@ -280,12 +366,36 @@ async function perform(
         stage: "讨论完成",
         message: "回复已保存",
       });
+      if (result.buildNow && images.length && proposalId) {
+        const proposal = get<Proposal>("proposal", proposalId)!;
+        const next = enqueue(p.id, j.baseRevisionId, "generate", { prompt: proposal.description, attachmentIds: proposal.attachmentIds, objectId: proposal.objectId, proposalId });
+        put("proposal", { ...proposal, jobId: next.id, status: "running" });
+      }
+      return;
+    }
+    if (j.type === "video") {
+      update(j, { stage: "Blender 正在渲染视频" });
+      const v = await renderVideo(
+        ownedVideo(p.id, payload.videoId),
+        signal,
+        (progress) => update(j, { progress }),
+      );
+      update(j, {
+        status: "succeeded",
+        stage: "视频已完成",
+        message: "视频已保存，可在导出面板下载",
+        renderArtifactId: v.artifactId,
+      });
       return;
     }
     const root = path.join(DATA, "jobs", j.id);
     fs.mkdirSync(root, { recursive: true });
     dir = path.join(root, "attempt-0");
     fs.mkdirSync(dir);
+    if (j.type === "preview") {
+      await finishPreview(j, dir, signal, payload.resumeJobId);
+      return;
+    }
     if (j.baseRevisionId)
       fs.copyFileSync(
         artifactPath(revision(j.baseRevisionId).artifacts.blend),
@@ -345,11 +455,52 @@ async function perform(
     let scene;
     let script = "";
     let summary = "";
-    if (j.type === "generate") {
+    if (["blender-sync", "blender-edit"].includes(j.type) || payload.executor === "mcp") {
+      if (!j.baseRevisionId) throw new Error("请先保存作品");
+      update(j, { stage: "同步 Blender 工作副本" });
+      let command = payload.executor === "mcp" ? payload : undefined;
+      if (j.type === "blender-edit") {
+        update(j, { stage: "理解 Blender 局部调整" });
+        const objects = await blenderBridge.inspect(p.id);
+        const selected = objects.find((o: any) => o.id === payload.objectId);
+        if (!selected) throw new Error("Blender 中找不到选中部件");
+        command = await interpretBlenderEdit(dir, payload.prompt, selected, j.baseRevisionId, payload.objectId, signal, message => update(j, { message }));
+      }
+      await blenderBridge.capture(p.id, j.baseRevisionId, dir, signal, command);
+      sceneStage(j, dir, "校验文件与生成基础预览");
+      scene = await validateScene(dir, signal, "basic");
+      summary = "Blender 修改已同步到工作台，可撤销此版本";
+    } else if (j.type === "generate" && payload.attachmentIds?.length) {
+      validateAttachments(p.id, payload.attachmentIds);
+      const resume = payload.resumeJobId ? get<Job>("job", payload.resumeJobId) : undefined;
+      if (resume && (resume.projectId !== p.id || resume.baseRevisionId !== j.baseRevisionId)) throw new Error("不能复用其他作品或版本的候选");
+      const runId = resume?.visual?.runId || j.id;
+      const result = await runVisualPipeline({
+        runId, root: path.join(DATA, "jobs", runId, "visual"), prompt: payload.prompt,
+        images: payload.attachmentIds.map((id: string) => attachmentPath(p.id, id)),
+        baseFile: j.baseRevisionId ? artifactPath(revision(j.baseRevisionId).artifacts.blend) : undefined,
+        baseScene: j.baseRevisionId ? revision(j.baseRevisionId).scene : { objects: [], stats: { objects: 0, vertices: 0, triangles: 0 }, units: "meters", coordinates: "blender-z-up" },
+        objectId: payload.objectId, signal, restartFailedPhase: !!resume,
+        onState: visual => update(j, { visual }), onStage: stage => update(j, { stage }),
+        register: (file, label, mime) => artifact(file, p.id, label, mime),
+        generate: (prompt, images) => codex.generate(p.id, null, prompt, signal, () => {}, message => update(j, { message }), images),
+        execute: d => executeScene(d, "execute", signal, stage => update(j, { stage })),
+        validate: d => validateScene(d, signal),
+      });
+      dir = result.dir; scene = checkFiles(dir); summary = result.summary;
+    } else if (j.type === "generate") {
+      if (payload.resumeRawJobId) {
+        const previous = get<Job>("job", payload.resumeRawJobId);
+        if (!previous || previous.projectId !== p.id || previous.baseRevisionId !== j.baseRevisionId || previous.visual) throw new Error("不能复用其他作品或版本的模型");
+        const source = path.join(DATA, "jobs", previous.id, "attempt-0");
+        for (const name of ["raw.blend", "generated.py"]) fs.copyFileSync(path.join(source, name), path.join(dir, name));
+        script = fs.readFileSync(path.join(dir, "generated.py"), "utf8");
+        summary = "已从保存的模型恢复预览，未重新建模";
+        sceneStage(j, dir, "校验文件与生成基础预览");
+        scene = await validateScene(dir, signal, "basic");
+      } else {
       let context = `用户指令：${payload.prompt}\n当前版本：${j.baseRevisionId || "空白场景"}\n选中对象 ID：${payload.objectId || "无"}\n参考图片（按顺序）：${JSON.stringify(payload.attachmentIds || [])}\n最新场景：${JSON.stringify(j.baseRevisionId ? revision(j.baseRevisionId).scene : { objects: [] })}`;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (signal.aborted) throw new Error("任务已取消");
-        update(j, { stage: attempt ? `修复脚本（${attempt}/2）` : "生成脚本" });
+      update(j, { stage: "生成脚本" });
         const result = await codex.generate(
           p.id,
           project(p.id).threadId,
@@ -359,39 +510,22 @@ async function perform(
             const current = project(p.id);
             put("project", { ...current, threadId: id });
           },
-          () => {},
+          message => update(j, { message }),
           (payload.attachmentIds || []).map((id: string) =>
             attachmentPath(p.id, id),
           ),
         );
         script = result.python;
         summary = result.summary;
-        if (attempt) {
-          dir = path.join(root, `attempt-${attempt}`);
-          fs.mkdirSync(dir);
-          if (j.baseRevisionId)
-            fs.copyFileSync(
-              artifactPath(revision(j.baseRevisionId).artifacts.blend),
-              path.join(dir, "base.blend"),
-            );
-        }
-        fs.writeFileSync(path.join(dir, "generated.py"), script);
-        try {
-          scene = await executeScene(dir, "execute", signal, (stage) =>
-            update(j, { stage }),
-          );
-          break;
-        } catch (e) {
-          if (signal.aborted || attempt === 2) throw e;
-          context += `\n本次脚本在 Blender 4.5 执行失败；原版本未改变。请修复脚本。错误：${(e as Error).message}`;
-        }
+      fs.writeFileSync(path.join(dir, "generated.py"), script);
+      scene = await executeScene(dir, "execute", signal, stage => sceneStage(j, dir, stage), "basic");
       }
     } else {
       script = fs.readFileSync(path.join(ROOT, "blender/worker.py"), "utf8");
       fs.writeFileSync(path.join(dir, "generated.py"), script);
       fs.writeFileSync(path.join(dir, "command.json"), JSON.stringify(payload));
       scene = await executeScene(dir, "command", signal, (stage) =>
-        update(j, { stage }),
+        sceneStage(j, dir, stage), "basic",
       );
       summary = (
         {
@@ -410,10 +544,13 @@ async function perform(
     if (project(p.id).currentRevisionId !== j.baseRevisionId)
       throw new Error("版本已变化，任务结果未覆盖当前项目");
     // Host copies verified output out of the writable job sandbox into immutable revision storage.
+    update(j, { stage: "保存作品", error: null });
     const rid = uid();
     const out = path.join(DATA, "revisions", rid);
     fs.mkdirSync(out, { recursive: true });
     const artifacts: any = {};
+    const previewReport = path.join(dir, "preview.json");
+    const needsDetail = fs.existsSync(previewReport) && !JSON.parse(fs.readFileSync(previewReport, "utf8")).complete;
     const files = [
       ["blend", "scene.blend", "application/x-blender"],
       ["glb", "scene.glb", "model/gltf-binary"],
@@ -428,7 +565,11 @@ async function perform(
         fs.chmodSync(f, 0o400);
         artifacts[key] = artifact(f, p.id, `Ai-FormaDesk-${rid}-${name}`, mime);
       }
+      if (fs.existsSync(path.join(dir, "textures"))) fs.cpSync(path.join(dir, "textures"), path.join(out, "textures"), { recursive: true });
+      const visual = j.visual ? archiveVisual(j.visual, out, artifactPath, (f, label, mime) => artifact(f, p.id, label, mime)) : undefined;
       const r: Revision = {
+        preview: { status: needsDetail ? "basic" : "ready" },
+        visual,
         id: rid,
         projectId: p.id,
         parentId: j.baseRevisionId,
@@ -451,15 +592,23 @@ async function perform(
           ...get<Proposal>("proposal", payload.proposalId)!,
           status: "succeeded",
         });
+
       update(j, {
         status: "succeeded",
         stage: "完成",
         resultRevisionId: rid,
+        recoverablePreview: false,
         message: summary,
       });
-      if (j.type === "generate") addMessage(p.id, "assistant", summary);
+      if (["generate", "blender-edit"].includes(j.type)) addMessage(p.id, "assistant", summary);
     })();
+    if (needsDetail && !signal.aborted) {
+      const next = enqueue(p.id, rid, "preview", { prompt: j.title || "预览细节" });
+      put("revision", { ...revision(rid), preview: { status: "basic", jobId: next.id } });
+    }
+    if (j.baseRevisionId && (["blender-sync", "blender-edit"].includes(j.type) || payload.executor === "mcp")) blenderBridge.committed(p.id, j.baseRevisionId, rid);
   } catch (e) {
+    if (["blender-sync", "blender-edit"].includes(j.type) || payload.executor === "mcp") blenderBridge.failed(p.id);
     update(j, {
       status: signal.aborted ? "cancelled" : "failed",
       stage: signal.aborted ? "已取消" : "失败",
@@ -511,6 +660,24 @@ export function cancel(id: string) {
 }
 export function cancelAll() {
   for (const c of controllers.values()) c.abort();
+}
+export function retryJob(id: string) {
+  const previous = get<Job>("job", id);
+  if (previous?.type === "preview") {
+    if (!["failed", "cancelled"].includes(previous.status)) throw new Error("只能继续未完成的预览");
+    return enqueue(previous.projectId, previous.baseRevisionId, "preview", { resumeJobId: previous.id, prompt: previous.title });
+  }
+  if (!previous || !previous.request || previous.type !== "generate") throw new Error("此任务没有可复用的建模输入");
+  if (!["failed", "cancelled"].includes(previous.status)) throw new Error("只能重试失败或已取消的任务");
+  validateAttachments(previous.projectId, previous.request.attachmentIds);
+  const source = path.join(DATA, "jobs", previous.id, "attempt-0");
+  const resumeRawJobId = !previous.visual && !previous.request.attachmentIds.length && fs.existsSync(path.join(source, "raw.blend")) && fs.existsSync(path.join(source, "generated.py")) ? previous.id : undefined;
+  const next = enqueue(previous.projectId, previous.baseRevisionId, "generate", { ...previous.request, resumeJobId: previous.id, resumeRawJobId });
+  if (previous.request.proposalId) {
+    const proposal = get<Proposal>("proposal", previous.request.proposalId);
+    if (proposal) put("proposal", { ...proposal, jobId: next.id, status: "running" });
+  }
+  return next;
 }
 export function restore(
   pid: string,
