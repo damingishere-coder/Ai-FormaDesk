@@ -10,7 +10,7 @@
 | `npm run build` | TypeScript 与 Vite 构建通过 |
 | `npm audit --omit=dev` | 生产依赖已知漏洞 0 |
 | 界面回归 | 聊天、封面两种场景、统一导出、场景列表、撤销重做，共 6 项通过 |
-| 独立 `.app` 启动 | 已验证 `app.isPackaged === true`，加载本机内置后台和前端 |
+| 独立 `.app` 启动 | 复制到源码目录之外，以最小 PATH 启动；验证 `app.isPackaged === true`，加载应用内置依赖、后台和前端 |
 | 真实 GLB 显示 | 12 个可编辑对象的 Blender 测试作品正常显示 |
 | 桌面隔离 | Node integration 关闭，context isolation / sandbox 开启 |
 | 桌面会话 | 普通 HTTP 客户端直接请求桌面会话得到 403 |
@@ -26,7 +26,7 @@
 
 ```sh
 FORMA_DESKTOP_EXECUTABLE="$PWD/release/mac-arm64/Ai-FormaDesk.app/Contents/MacOS/Ai-FormaDesk" \
-FORMA_DESKTOP_FULL=1 npm run test:desktop
+FORMA_DESKTOP_MINIMAL_PATH=1 FORMA_DESKTOP_FULL=1 npm run test:desktop
 ```
 
 ## 边界

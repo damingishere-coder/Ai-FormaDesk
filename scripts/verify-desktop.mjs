@@ -6,6 +6,20 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 const root = path.resolve(import.meta.dirname, "..");
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "forma-desktop-smoke-"));
+// Test distribution portability: Node must not find missing packages in a
+// source checkout above the application directory.
+let packagedExecutable;
+if (process.env.FORMA_DESKTOP_EXECUTABLE) {
+  const source = path.resolve(process.env.FORMA_DESKTOP_EXECUTABLE);
+  const appRoot = source.slice(0, source.indexOf(".app/") + 4);
+  assert.ok(
+    source.includes(".app/Contents/MacOS/"),
+    "Expected a macOS app executable",
+  );
+  const isolatedApp = path.join(home, path.basename(appRoot));
+  execFileSync("/usr/bin/ditto", [appRoot, isolatedApp]);
+  packagedExecutable = path.join(isolatedApp, path.relative(appRoot, source));
+}
 const evidence = path.join(root, "build/desktop-evidence");
 fs.mkdirSync(evidence, { recursive: true });
 const data = path.join(home, "data");
@@ -30,10 +44,10 @@ const errors = [];
 const checks = [];
 async function launch() {
   instance = await electron.launch({
-    ...(process.env.FORMA_DESKTOP_EXECUTABLE
-      ? { executablePath: process.env.FORMA_DESKTOP_EXECUTABLE, args: [] }
+    ...(packagedExecutable
+      ? { executablePath: packagedExecutable, args: [] }
       : { args: [root] }),
-    cwd: root,
+    cwd: packagedExecutable ? home : root,
     env: {
       ...process.env,
       FORMA_DESKTOP_TEST_HOME: home,
@@ -231,6 +245,7 @@ try {
       {
         passed: true,
         packaged: preferences.packaged,
+        isolatedApp: packagedExecutable || null,
         checks,
         health: {
           blender: health.blender.ok,

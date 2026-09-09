@@ -3,6 +3,7 @@ productName: Ai-FormaDesk
 asar: true
 electronDist: node_modules/electron/dist
 npmRebuild: false
+afterPack: scripts/verify-packaged-runtime.cjs
 files:
   - "**/*"
   - "!node_modules/**/*"
@@ -11,6 +12,13 @@ extraResources:
     to: icon.png
   - from: build/desktop-runtime
     to: runtime
+    filter:
+      - "**/*"
+      - "!**/.DS_Store"
+  # electron-builder excludes a source root's node_modules from generic copies.
+  # Copy that directory explicitly so the backend never borrows checkout packages.
+  - from: build/desktop-runtime/node_modules
+    to: runtime/node_modules
     filter:
       - "**/*"
       - "!**/.DS_Store"

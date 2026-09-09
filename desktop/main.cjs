@@ -426,7 +426,11 @@ else {
         await dialog.showMessageBox(win, {
           type: "error",
           message: "工作台暂时无法启动",
-          detail: e.message + "\n可从应用菜单检查路径设置，修正后退出重开。",
+          detail:
+            e.message +
+            (e.message.includes("ERR_MODULE_NOT_FOUND")
+              ? "\n应用安装包缺少运行依赖，请安装修复后的版本。作品数据仍保留在原目录。"
+              : "\n可从应用菜单检查路径设置，修正后退出重开。"),
           buttons: ["知道了"],
         });
       }
