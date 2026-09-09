@@ -1,3 +1,4 @@
+import { lockDesktopData } from "./data-lock";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
@@ -7,6 +8,7 @@ const configuredData = path.resolve(
 );
 fs.mkdirSync(configuredData, { recursive: true, mode: 0o700 });
 export const DATA = fs.realpathSync(configuredData);
+if (process.env.ZAOWU_DESKTOP_TOKEN) lockDesktopData(DATA);
 export const BLENDER =
   process.env.ZAOWU_BLENDER ||
   "/Applications/Blender 4.5 LTS.app/Contents/MacOS/Blender";

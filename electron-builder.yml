@@ -1,0 +1,43 @@
+appId: com.formadesk.desktop
+productName: Ai-FormaDesk
+asar: true
+electronDist: node_modules/electron/dist
+npmRebuild: false
+files:
+  - "**/*"
+  - "!node_modules/**/*"
+extraResources:
+  - from: build/desktop-runtime
+    to: runtime
+    filter:
+      - "**/*"
+      - "!**/.DS_Store"
+directories:
+  app: desktop
+  output: release
+  buildResources: desktop/assets
+mac:
+  category: public.app-category.graphics-design
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+  icon: desktop/assets/icon.icns
+  identity: "-"
+  hardenedRuntime: false
+  minimumSystemVersion: "13.0"
+  extendInfo:
+    NSHighResolutionCapable: true
+    NSHumanReadableCopyright: Ai-FormaDesk contributors
+dmg:
+  title: Ai-FormaDesk 1.0
+  contents:
+    - x: 170
+      y: 190
+    - x: 450
+      y: 190
+      type: link
+      path: /Applications
+artifactName: Ai-FormaDesk-${version}-macOS-${arch}.${ext}
+publish: null

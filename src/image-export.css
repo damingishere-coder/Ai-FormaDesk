@@ -1,0 +1,399 @@
+.workbench.is-image-export {
+  --export-sidebar: 320px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--export-sidebar);
+  grid-template-rows: 72px minmax(0, 1fr);
+  min-height: 0;
+}
+.is-image-export
+  > :not(.canvas-stage):not(.image-export-header):not(
+    .image-export-settings
+  ):not(.render-preview):not(.video-recorder) {
+  display: none;
+}
+.viewport-surface {
+  width: 100%;
+  height: 100%;
+}
+.is-image-export > .canvas-stage {
+  position: relative;
+  inset: auto;
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  container-type: size;
+  background: #e9ece7;
+}
+.is-image-export .viewport-surface {
+  width: min(
+    calc(100cqw - 48px),
+    calc((100cqh - 112px) * var(--output-aspect))
+  );
+  height: min(
+    calc(100cqh - 112px),
+    calc((100cqw - 48px) / var(--output-aspect))
+  );
+  flex: 0 0 auto;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px #c5cec2,
+    0 10px 32px #273c2912;
+  background: #f8f8f6;
+}
+.is-image-export .viewport-surface.transparent {
+  background: repeating-conic-gradient(#d9ded8 0% 25%, #fff 0% 50%) 50% / 20px
+    20px;
+}
+.image-export-header {
+  grid-area: 1 / 1 / 2 / -1;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--line);
+}
+.image-export-header button {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.image-export-header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+.image-export-header > span {
+  margin-left: auto;
+  font-size: 13px;
+  color: #697367;
+}
+.image-export-settings {
+  grid-area: 2 / 2;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: #fafbf9;
+}
+.export-type-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 20px 20px 0;
+  padding: 4px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: #edf0eb;
+}
+.export-type-tabs button {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  border-radius: 7px;
+  gap: 6px;
+  font-size: 13px;
+  color: #7d887b;
+}
+.export-type-tabs [aria-selected="true"] {
+  background: #fff;
+  color: #2e4438;
+  box-shadow: 0 2px 7px #2436250c;
+}
+.export-content,
+.image-export-settings .video-export {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+.image-export-settings fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.image-export-settings .video-modes {
+  flex-direction: column;
+  margin: 0 0 24px;
+}
+.image-export-settings .video-modes button {
+  display: block;
+  padding: 14px;
+  width: 100%;
+}
+.image-export-settings .video-modes strong,
+.image-export-settings .video-modes small {
+  display: block;
+}
+.image-export-settings .video-modes strong {
+  font-size: 13px;
+}
+.image-export-settings .video-modes small {
+  font-size: 11px;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+.model-formats legend {
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: #75816f;
+}
+.model-formats label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px 12px;
+  margin-bottom: 10px;
+  border: 1px solid #e0e6dc;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.model-formats label.selected {
+  background: #f0f6ff;
+  border-color: #94b8ee;
+}
+.model-formats input {
+  margin: 3px 0 0;
+  accent-color: var(--blue);
+}
+.model-formats label > span {
+  flex: 1;
+  min-width: 0;
+}
+.model-formats strong {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 500;
+}
+.model-formats strong small {
+  margin-left: auto;
+  font-size: 10px;
+  color: #809078;
+}
+.model-formats label > span > span {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #7f8b78;
+}
+.model-export-summary {
+  margin: 28px 0 0;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  color: #83907c;
+  font-size: 11px;
+}
+.model-export-summary div {
+  display: flex;
+  justify-content: space-between;
+  margin: 10px 0;
+}
+.model-export-summary dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.video-recorder {
+  display: contents;
+}
+.is-image-export .recording-bar {
+  left: calc((100% - var(--export-sidebar)) / 2);
+  bottom: 12px;
+  max-width: calc(100% - var(--export-sidebar) - 24px);
+  padding: 12px 16px;
+  gap: 14px;
+}
+.is-image-export .video-review {
+  left: calc((100% - var(--export-sidebar)) / 2);
+  max-width: calc(100% - var(--export-sidebar) - 48px);
+}
+.is-image-export .video-review-actions {
+  flex-wrap: wrap;
+}
+.image-export-fields {
+  padding: 24px 20px;
+  flex: 1;
+}
+.image-export-fields h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.composition-description {
+  font-size: 12px;
+  color: #6d786b;
+  margin: 10px 0 24px;
+}
+.image-export-settings .render-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.image-export-settings select {
+  width: 100%;
+}
+.image-export-settings .render-dimensions {
+  margin: 18px 0;
+}
+.image-export-settings .render-dimensions label {
+  min-width: 0;
+  flex: 1;
+}
+.image-export-settings .render-dimensions input {
+  width: 100%;
+}
+.composition-transparent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.composition-transparent input {
+  width: 16px;
+  height: 16px;
+  accent-color: #304b3d;
+}
+.composition-transparent small {
+  margin-left: auto;
+  color: #6d786b;
+}
+.composition-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+}
+.composition-toolbar button {
+  min-height: 36px;
+  padding: 0 12px;
+  background: #ffffffa8;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.composition-canvas-hint {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  margin: 0;
+  text-align: center;
+  color: #626e60;
+  font-size: 12px;
+  pointer-events: none;
+}
+.composition-canvas-hint span {
+  display: block;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.composition-previous {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.composition-previous h3 {
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+.composition-thumbnail {
+  display: block;
+  padding: 0;
+  width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #edf0eb;
+}
+.composition-thumbnail img {
+  display: block;
+  width: 100%;
+  height: 132px;
+  object-fit: contain;
+}
+.composition-previous p,
+.composition-previous small {
+  font-size: 11px;
+  color: #6d786b;
+}
+.composition-previous a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.composition-submit {
+  position: sticky;
+  bottom: 0;
+  padding: 16px 20px;
+  background: #fafbf9;
+  border-top: 1px solid var(--line);
+}
+.composition-submit .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+}
+.composition-submit p,
+.composition-status,
+.composition-error {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.composition-error {
+  color: #a0432d;
+}
+.composition-status button {
+  text-decoration: underline;
+  min-height: 36px;
+}
+@media (max-width: 720px) {
+  .workbench.is-image-export {
+    --export-sidebar: 0px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 64px minmax(240px, 42dvh) minmax(0, 1fr);
+  }
+  .image-export-header {
+    gap: 12px;
+    padding: 0 12px;
+  }
+  .image-export-header h1 {
+    font-size: 16px;
+  }
+  .image-export-header > span {
+    display: none;
+  }
+  .image-export-settings {
+    grid-area: 3 / 1;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .image-export-fields {
+    padding: 18px 20px;
+  }
+  .composition-toolbar button {
+    padding: 0 9px;
+  }
+  .is-image-export.is-recording .canvas-stage {
+    grid-row: 2 / -1;
+  }
+  .is-image-export.is-recording .image-export-settings {
+    display: none;
+  }
+  .is-image-export .recording-bar {
+    flex-wrap: wrap;
+    width: calc(100% - 24px);
+  }
+}

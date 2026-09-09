@@ -1,3 +1,6 @@
+import { useChatLayout } from "./useChatLayout";
+import { BuildProgress } from "./BuildProgress";
+import { etaText } from "./progress";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   ArrowUp,
@@ -11,6 +14,7 @@ import {
   Play,
   MessageSquare,
   RotateCw,
+  Minus,
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { api, uploadAttachment } from "./api";
@@ -45,6 +49,8 @@ export function Composer({
   modelReady,
   selected,
   expanded,
+  hidden,
+  onHide,
   onExpanded,
   onDiscuss,
   onBuild,
@@ -52,6 +58,10 @@ export function Composer({
   onHealth,
   onError,
   suggested,
+  preview,
+  disconnected,
+  onReload,
+  onRetryJob,
 }: {
   snapshot: Snapshot;
   busy: boolean;
@@ -60,6 +70,8 @@ export function Composer({
   modelReady: boolean;
   selected: string | null;
   expanded: boolean;
+  hidden: boolean;
+  onHide: () => void;
   onExpanded: (v: boolean) => void;
   onDiscuss: (text: string, ids: string[]) => Promise<boolean>;
   onBuild: (p: Proposal) => void;
@@ -67,7 +79,65 @@ export function Composer({
   onHealth: () => void;
   onError: (e: string) => void;
   suggested: string;
+  preview: "loading" | "ready" | "failed";
+  disconnected: boolean;
+  onReload: () => void;
+  onRetryJob?: (id: string) => void;
 }) {
+  const layout = useChatLayout(expanded);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const titlebar = useRef<HTMLElement>(null);
+  const footer = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const header = titlebar.current;
+    const input = footer.current;
+    if (!header || !input) return;
+    const observer = new ResizeObserver(() => {
+      if (!header.offsetHeight) return;
+      layout.setCollapsedHeight(header.offsetHeight + input.scrollHeight + 2);
+    });
+    observer.observe(header);
+    observer.observe(input);
+    return () => observer.disconnect();
+  }, []);
+  const [flow, setFlow] = useState(false);
+  const [time, setTime] = useState(Date.now());
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setInterval(() => setTime(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [busy]);
+  const buildJob =
+    job && ["generate", "preview"].includes(job.type)
+      ? job
+      : [...(snapshot.jobs || [])]
+          .reverse()
+          .find((j) => ["generate", "preview"].includes(j.type)) || null;
+  useEffect(() => {
+    if (
+      buildJob &&
+      ["queued", "running", "failed", "cancelled"].includes(buildJob.status)
+    ) {
+      setFlow(true);
+      onExpanded(true);
+    }
+  }, [buildJob?.id]);
+  useEffect(() => {
+    if (buildJob?.status === "succeeded" && preview === "ready") setFlow(false);
+  }, [buildJob?.status, preview]);
+  const retry = () => {
+    if (buildJob?.request || buildJob?.type === "preview") {
+      onRetryJob?.(buildJob.id);
+      return;
+    }
+    const p = [...(snapshot.proposals || [])]
+      .reverse()
+      .find(
+        (p) =>
+          p.jobId === buildJob?.id && ["failed", "ready"].includes(p.status),
+      );
+    if (p) onBuild(p);
+  };
   const pid = snapshot.project.id;
   if (!drafts.has(pid)) drafts.set(pid, { text: "", images: [] });
   const draft = useSyncExternalStore(
@@ -87,8 +157,7 @@ export function Composer({
     [dragOver, setDragOver] = useState(false);
   const list = useRef<HTMLDivElement>(null),
     nearBottom = useRef(true),
-    chooser = useRef<HTMLInputElement>(null),
-    gesture = useRef<number | null>(null);
+    chooser = useRef<HTMLInputElement>(null);
   const update = (fn: (d: Draft) => Draft) => {
     const next = fn(drafts.get(pid) || current.current);
     drafts.set(pid, next);
@@ -101,6 +170,13 @@ export function Composer({
       onExpanded(true);
     }
   }, [suggested]);
+  useEffect(() => {
+    if (textarea.current) {
+      textarea.current.style.height = "auto";
+      textarea.current.style.height =
+        Math.min(160, Math.max(48, textarea.current.scrollHeight)) + "px";
+    }
+  }, [draft.text, layout.layout.width]);
   const messageVersion = snapshot.messages
     .map((m) => `${m.id}:${m.status}:${m.text}`)
     .join("\n");
@@ -236,7 +312,10 @@ export function Composer({
   const object = snapshot.scene.objects.find((o) => o.id === selected);
   return (
     <section
-      className={`composer-wrap ${expanded ? "expanded" : ""} ${dragOver ? "drag-over" : ""}`}
+      className={`composer-wrap ${expanded ? "expanded" : "compact"} ${hidden ? "is-hidden" : ""} ${dragOver ? "drag-over" : ""}`}
+      style={layout.style}
+      data-moved={layout.layout.moved}
+      data-dragging={layout.dragging}
       aria-label="AI 创作对话"
       onDragOver={(e) => {
         if (Array.from(e.dataTransfer.types).includes("Files")) {
@@ -255,163 +334,201 @@ export function Composer({
       }}
     >
       <div className="composer glass">
-        <button
-          className="chat-handle"
-          aria-label={expanded ? "收起创作对话" : "展开创作对话"}
-          aria-expanded={expanded}
-          onClick={() => {
-            if (gesture.current === -1) {
-              gesture.current = null;
-              return;
-            }
-            onExpanded(!expanded);
-          }}
-          onPointerDown={(e) => {
-            gesture.current = e.clientY;
-            e.currentTarget.setPointerCapture(e.pointerId);
-          }}
-          onPointerUp={(e) => {
-            if (
-              gesture.current !== null &&
-              Math.abs(e.clientY - gesture.current) > 30
-            ) {
-              onExpanded(e.clientY < gesture.current);
-              e.preventDefault();
-            }
-            gesture.current =
-              Math.abs(e.clientY - (gesture.current ?? e.clientY)) > 30
-                ? -1
-                : null;
-          }}
-        >
-          <span className="handle-bar" />
-          <span>
-            <MessageSquare size={13} /> {expanded ? "创作对话" : "聊聊你的想法"}
-          </span>
-          <ChevronDown size={15} className={expanded ? "" : "flipped"} />
-        </button>
+        <header className="chat-titlebar" ref={titlebar}>
+          <button
+            className="chat-handle"
+            aria-label="移动创作对话"
+            onPointerDown={(e) => layout.start(e)}
+            onClick={() => {
+              if (!layout.moved.current) onExpanded(!expanded);
+            }}
+          >
+            <MessageSquare size={18} />
+            <span>创作对话</span>
+            {!expanded && !!draft.images.length && (
+              <small>{draft.images.length} 张参考图</small>
+            )}
+            {!expanded && busy && (
+              <small title={job ? etaText(job, time) : undefined}>
+                {job?.stage} · {job ? etaText(job, time) : ""}
+              </small>
+            )}
+          </button>
+          <div className="chat-title-actions">
+            {expanded && (
+              <button
+                className="icon"
+                title="恢复默认布局"
+                aria-label="恢复默认布局"
+                onClick={layout.reset}
+              >
+                <RotateCw size={14} />
+              </button>
+            )}
+            <button
+              className="icon"
+              aria-label={expanded ? "收起创作对话" : "展开创作对话"}
+              aria-expanded={expanded}
+              title={expanded ? "收起为小输入栏" : "展开创作对话"}
+              onClick={() => onExpanded(!expanded)}
+            >
+              <ChevronDown size={16} className={expanded ? "" : "flipped"} />
+            </button>
+            <button
+              className="icon"
+              aria-label="隐藏创作对话"
+              title="隐藏创作对话，保留草稿和任务"
+              onClick={onHide}
+            >
+              <Minus size={16} />
+            </button>
+          </div>
+        </header>
         <div
           className="conversation-reveal"
           aria-hidden={!expanded}
           inert={!expanded}
         >
-          <div
-            className="conversation-scroll"
-            ref={list}
-            tabIndex={0}
-            onWheel={(e) => {
-              if (e.deltaY < 0) nearBottom.current = false;
-            }}
-            onTouchMove={() => {
-              nearBottom.current = false;
-            }}
-            onKeyDown={(e) => {
-              if (["PageUp", "Home", "ArrowUp"].includes(e.key))
+          {flow && buildJob ? (
+            <BuildProgress
+              job={buildJob}
+              preview={preview}
+              disconnected={disconnected}
+              onRetry={retry}
+              onReload={onReload}
+              onStop={onStop}
+              onChat={() => setFlow(false)}
+            />
+          ) : (
+            <div
+              className="conversation-scroll"
+              ref={list}
+              tabIndex={0}
+              onWheel={(e) => {
+                if (e.deltaY < 0) nearBottom.current = false;
+              }}
+              onTouchMove={() => {
                 nearBottom.current = false;
-            }}
-            onScroll={() => {
-              const el = list.current!;
-              if (el.scrollHeight - el.scrollTop - el.clientHeight < 70) {
-                nearBottom.current = true;
-                setNewReply(false);
-              }
-            }}
-          >
-            {!snapshot.messages.length && (
-              <div className="chat-welcome">
-                <Box size={26} strokeWidth={1.2} />
-                <h3>先聊想法，再让它成形。</h3>
-                <p>
-                  发一张参考图，或说说还没想清楚的细节。
-                  <br />
-                  方案确定后，由你点击开始建模。
-                </p>
-              </div>
-            )}
-            {snapshot.messages.map((m) => (
-              <article className={`conversation-message ${m.role}`} key={m.id}>
-                <small>
-                  {m.role === "user"
-                    ? "你"
-                    : m.role === "error"
-                      ? "执行反馈"
-                      : "Codex"}
-                </small>
-                {!!m.attachmentIds?.length && (
-                  <div className="message-images">
-                    {m.attachmentIds.map((id, i) => (
-                      <button
-                        key={id}
-                        onClick={() => setLightbox(imageUrl(pid, id))}
-                      >
-                        <img src={imageUrl(pid, id)} alt={`图 ${i + 1}`} />
-                        <span>图 {i + 1}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {m.status === "pending" ? (
-                  <p className="thinking">
-                    <Loader2 size={14} className="spin" />
-                    {job?.stage || "正在思考…"}
+              }}
+              onKeyDown={(e) => {
+                if (["PageUp", "Home", "ArrowUp"].includes(e.key))
+                  nearBottom.current = false;
+              }}
+              onScroll={() => {
+                const el = list.current!;
+                if (el.scrollHeight - el.scrollTop - el.clientHeight < 70) {
+                  nearBottom.current = true;
+                  setNewReply(false);
+                }
+              }}
+            >
+              {buildJob && (
+                <button className="flow-summary" onClick={() => setFlow(true)}>
+                  {buildJob.status === "succeeded"
+                    ? "✓ 建模记录"
+                    : buildJob.stage}{" "}
+                  · 查看流程与耗时
+                </button>
+              )}
+              {!snapshot.messages.length && (
+                <div className="chat-welcome">
+                  <Box size={26} strokeWidth={1.2} />
+                  <h3>先聊想法，再让它成形。</h3>
+                  <p>
+                    发一张参考图，或说说还没想清楚的细节。
+                    <br />
+                    明确说出按图建模后，会自动生成三视图并检查模型。
                   </p>
-                ) : (
-                  <p>{m.text}</p>
-                )}
-                {m.proposalId &&
-                  (() => {
-                    const p = snapshot.proposals?.find(
-                      (p) => p.id === m.proposalId,
-                    );
-                    if (!p) return null;
-                    const usable =
-                      ["ready", "failed"].includes(p.status) &&
-                      p.baseRevisionId === snapshot.project.currentRevisionId;
-                    return (
-                      <div className="proposal-card">
-                        <small>建模方案</small>
-                        <h3>{p.title}</h3>
-                        <p>{p.description}</p>
-                        {!!p.attachmentIds.length && (
-                          <div className="proposal-images">
-                            {p.attachmentIds.map((id, i) => (
-                              <button
-                                key={id}
-                                onClick={() => setLightbox(imageUrl(pid, id))}
-                              >
-                                <img
-                                  src={imageUrl(pid, id)}
-                                  alt={`方案参考图 ${i + 1}`}
-                                />
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                </div>
+              )}
+              {snapshot.messages.map((m) => (
+                <article
+                  className={`conversation-message ${m.role}`}
+                  key={m.id}
+                >
+                  <small>
+                    {m.role === "user"
+                      ? "你"
+                      : m.role === "error"
+                        ? "执行反馈"
+                        : "Codex"}
+                  </small>
+                  {!!m.attachmentIds?.length && (
+                    <div className="message-images">
+                      {m.attachmentIds.map((id, i) => (
                         <button
-                          className="button dark"
-                          disabled={!usable || busy || !modelReady}
-                          onClick={() => onBuild(p)}
+                          key={id}
+                          onClick={() => setLightbox(imageUrl(pid, id))}
                         >
-                          <Play size={14} />
-                          {p.status === "succeeded"
-                            ? "已完成"
-                            : p.status === "running"
-                              ? "正在建模"
-                              : !usable
-                                ? "方案已过期，请继续讨论"
-                                : p.status === "failed"
-                                  ? "重试建模"
-                                  : p.baseRevisionId
-                                    ? "应用修改"
-                                    : "开始建模"}
+                          <img src={imageUrl(pid, id)} alt={`图 ${i + 1}`} />
+                          <span>图 {i + 1}</span>
                         </button>
-                      </div>
-                    );
-                  })()}
-              </article>
-            ))}
-          </div>
-          {newReply && (
+                      ))}
+                    </div>
+                  )}
+                  {m.status === "pending" ? (
+                    <p className="thinking">
+                      <Loader2 size={14} className="spin" />
+                      {job?.stage || "正在思考…"}
+                    </p>
+                  ) : (
+                    <p>{m.text}</p>
+                  )}
+                  {m.proposalId &&
+                    (() => {
+                      const p = snapshot.proposals?.find(
+                        (p) => p.id === m.proposalId,
+                      );
+                      if (!p) return null;
+                      const usable =
+                        ["ready", "failed"].includes(p.status) &&
+                        p.baseRevisionId === snapshot.project.currentRevisionId;
+                      return (
+                        <div className="proposal-card">
+                          <small>建模方案</small>
+                          <h3>{p.title}</h3>
+                          <p>{p.description}</p>
+                          {!!p.attachmentIds.length && (
+                            <div className="proposal-images">
+                              {p.attachmentIds.map((id, i) => (
+                                <button
+                                  key={id}
+                                  onClick={() => setLightbox(imageUrl(pid, id))}
+                                >
+                                  <img
+                                    src={imageUrl(pid, id)}
+                                    alt={`方案参考图 ${i + 1}`}
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <button
+                            className="button dark"
+                            disabled={!usable || busy || !modelReady}
+                            onClick={() => onBuild(p)}
+                          >
+                            <Play size={14} />
+                            {p.status === "succeeded"
+                              ? "已完成"
+                              : p.status === "running"
+                                ? "正在建模"
+                                : !usable
+                                  ? "方案已过期，请继续讨论"
+                                  : p.status === "failed"
+                                    ? "重试建模"
+                                    : p.baseRevisionId
+                                      ? "应用修改"
+                                      : "开始建模"}
+                          </button>
+                        </div>
+                      );
+                    })()}
+                </article>
+              ))}
+            </div>
+          )}
+          {newReply && !flow && (
             <button
               className="new-reply"
               onClick={() => {
@@ -432,133 +549,154 @@ export function Composer({
             </button>
           )}
         </div>
-        <div className="context-line">
-          <span className="context-dot" />
-          <span className="context-text">
-            {busy
-              ? job?.stage || "正在提交…"
-              : object
-                ? `正在讨论：${object.name}`
-                : "先讨论想法，确认方案后再建模。"}
-          </span>
-          {busy && <Loader2 size={14} className="spin" />}
-        </div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send();
-          }}
-        >
-          {!!draft.images.length && (
-            <div className="draft-images">
-              {draft.images.map((a, i) => (
-                <div className={`draft-image ${a.status}`} key={a.key}>
-                  <button type="button" onClick={() => setLightbox(a.url)}>
-                    <img src={a.url} alt={`待发送图 ${i + 1}`} />
-                  </button>
-                  <span>图 {i + 1}</span>
-                  <button
-                    type="button"
-                    className="remove-image"
-                    aria-label={`移除图 ${i + 1}`}
-                    disabled={busy}
-                    onClick={() => void remove(a)}
-                  >
-                    <X size={12} />
-                  </button>
-                  {a.status === "uploading" && (
-                    <Loader2 size={16} className="upload-indicator spin" />
-                  )}
-                  {a.status === "failed" && (
+        <div className="composer-footer" ref={footer}>
+          <div className="context-line">
+            <span className="context-text">
+              {busy
+                ? disconnected
+                  ? "正在重新连接"
+                  : job?.stage || "正在提交…"
+                : object
+                  ? `正在讨论：${object.name}`
+                  : "先讨论想法，确认方案后再建模。"}
+            </span>
+            {busy && <Loader2 size={14} className="spin" />}
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void send();
+            }}
+          >
+            {!!draft.images.length && (
+              <div className="draft-images">
+                {draft.images.map((a, i) => (
+                  <div className={`draft-image ${a.status}`} key={a.key}>
+                    <button type="button" onClick={() => setLightbox(a.url)}>
+                      <img src={a.url} alt={`待发送图 ${i + 1}`} />
+                    </button>
+                    <span>图 {i + 1}</span>
                     <button
                       type="button"
-                      className="retry-upload"
-                      title={a.error}
-                      onClick={() => void upload(a)}
+                      className="remove-image"
+                      aria-label={`移除图 ${i + 1}`}
+                      disabled={busy}
+                      onClick={() => void remove(a)}
                     >
-                      <RotateCw size={12} />
-                      重试
+                      <X size={12} />
                     </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-          <textarea
-            aria-label="创作想法"
-            value={draft.text}
-            placeholder="说说你的想法，或添加参考图片…"
-            onFocus={() => onExpanded(true)}
-            onChange={(e) => update((d) => ({ ...d, text: e.target.value }))}
-            onPaste={(e) => {
-              const files = Array.from(e.clipboardData.files);
-              if (files.length) {
-                e.preventDefault();
-                addFiles(files);
-              }
-            }}
-            onKeyDown={(e) => {
-              if (
-                e.key === "Enter" &&
-                !e.shiftKey &&
-                !e.nativeEvent.isComposing
-              ) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            disabled={busy}
-            rows={2}
-          />
-          <div className="composer-bottom">
-            <input
-              ref={chooser}
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              multiple
-              hidden
-              aria-label="选择参考图片"
-              onChange={(e) => {
-                addFiles(Array.from(e.target.files || []));
-                e.target.value = "";
+                    {a.status === "uploading" && (
+                      <Loader2 size={16} className="upload-indicator spin" />
+                    )}
+                    {a.status === "failed" && (
+                      <button
+                        type="button"
+                        className="retry-upload"
+                        title={a.error}
+                        onClick={() => void upload(a)}
+                      >
+                        <RotateCw size={12} />
+                        重试
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            <textarea
+              ref={textarea}
+              aria-label="创作想法"
+              value={draft.text}
+              placeholder="说说你的想法，或添加参考图片…"
+              onFocus={() => onExpanded(true)}
+              onChange={(e) => update((d) => ({ ...d, text: e.target.value }))}
+              onPaste={(e) => {
+                const files = Array.from(e.clipboardData.files);
+                if (files.length) {
+                  e.preventDefault();
+                  addFiles(files);
+                }
               }}
+              onKeyDown={(e) => {
+                if (
+                  e.key === "Enter" &&
+                  !e.shiftKey &&
+                  !e.nativeEvent.isComposing
+                ) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              disabled={busy}
+              rows={2}
             />
-            <button
-              type="button"
-              className="icon"
-              aria-label="添加图片"
-              title="添加图片，也可以拖入或粘贴"
-              disabled={busy || draft.images.length >= 6}
-              onClick={() => chooser.current?.click()}
-            >
-              <ImagePlus size={20} />
-            </button>
-            <button type="button" className="model-badge" onClick={onHealth}>
-              <span className={`status-dot ${aiReady ? "ok" : ""}`} />
-              Codex<span className="model-detail">Astra · 高</span>
-            </button>
-            <span className="input-hint">Enter 讨论 · Shift + Enter 换行</span>
-            {busy ? (
+            <div className="composer-bottom">
+              <input
+                ref={chooser}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                multiple
+                hidden
+                aria-label="选择参考图片"
+                onChange={(e) => {
+                  addFiles(Array.from(e.target.files || []));
+                  e.target.value = "";
+                }}
+              />
               <button
                 type="button"
-                className="send stop"
-                aria-label="停止任务"
-                onClick={onStop}
+                className="icon"
+                aria-label="添加图片"
+                title="添加图片，也可以拖入或粘贴"
+                disabled={busy || draft.images.length >= 6}
+                onClick={() => chooser.current?.click()}
               >
-                <Square size={17} />
+                <ImagePlus size={20} />
               </button>
-            ) : (
               <button
-                className="send"
-                aria-label="发送讨论"
-                disabled={!canSend}
+                type="button"
+                className="model-badge"
+                title="查看 Codex 连接状态"
+                onClick={onHealth}
               >
-                <ArrowUp size={23} />
+                <span className={`status-dot ${aiReady ? "ok" : ""}`} />
+                Codex
               </button>
-            )}
-          </div>
-        </form>
+              <span className="input-hint">
+                Enter 讨论 · Shift + Enter 换行
+              </span>
+              {busy ? (
+                <button
+                  type="button"
+                  className="send stop"
+                  aria-label="停止任务"
+                  onClick={onStop}
+                >
+                  <Square size={17} />
+                </button>
+              ) : (
+                <button
+                  className="send"
+                  aria-label="发送讨论"
+                  disabled={!canSend}
+                >
+                  <ArrowUp size={23} />
+                </button>
+              )}
+            </div>
+          </form>
+        </div>
       </div>
+      {expanded &&
+        ["n", "s", "e", "w", "ne", "nw", "se", "sw"].map((edge) => (
+          <div
+            key={edge}
+            role="separator"
+            aria-label={`调整聊天窗口 ${edge}`}
+            className={`chat-resize ${edge}`}
+            onPointerDown={(e) => layout.start(e, edge)}
+          />
+        ))}
       {lightbox &&
         createPortal(
           <div

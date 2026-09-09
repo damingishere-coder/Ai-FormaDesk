@@ -19,11 +19,15 @@ import {
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CameraSpec, Scene, SceneCommand } from "./types";
+import { applySceneLight } from "./sceneLighting";
 export type ViewportHandle = {
   camera: () => CameraSpec;
   view: (v: string) => void;
   fit: () => void;
   screenshot: () => string;
+  sampleCamera: () => CameraSpec;
+  restoreCamera: (c: CameraSpec) => void;
+  drawVideo: (target: HTMLCanvasElement) => void;
 };
 export type ViewportProps = {
   url: string | null;
@@ -35,9 +39,13 @@ export type ViewportProps = {
   onTransform: (id: string, t: SceneCommand["transform"]) => void;
   onError: (s: string) => void;
   readOnly?: boolean;
+  hideGizmo?: boolean;
   onCameraChange?: (camera: CameraSpec) => void;
   onReady?: () => void;
   frameAspect?: number;
+  imageAspect?: number;
+  transparentPreview?: boolean;
+  controlsEnabled?: boolean;
 };
 const C = new THREE.Matrix4().makeRotationX(-Math.PI / 2),
   Ci = C.clone().invert();
@@ -61,7 +69,33 @@ function Content({
   props: ViewportProps;
   handle: React.ForwardedRef<ViewportHandle>;
 }) {
-  const { camera, gl, invalidate, size } = useThree();
+  const { camera, gl, invalidate, size, scene } = useThree();
+  useEffect(() => {
+    gl.toneMapping = props.scene.lighting ? (props.scene.lighting.viewTransform === "AgX" ? THREE.AgXToneMapping : THREE.LinearToneMapping) : THREE.ACESFilmicToneMapping;
+    gl.toneMappingExposure = 2 ** (props.scene.lighting?.exposure || 0);
+    invalidate();
+  }, [props.scene.lighting, gl, invalidate]);
+  useEffect(() => {
+    const lighting = props.scene.lighting;
+    if (!lighting) return;
+    const color = new THREE.Color(lighting.worldColor);
+    // PMREM needs at least a 16px cube face (64px equirectangular width).
+    const pixels = new Float32Array(128 * 64 * 4);
+    for (let i = 0; i < pixels.length; i += 4) pixels.set([color.r, color.g, color.b, 1], i);
+    const environment = new THREE.DataTexture(pixels, 128, 64, THREE.RGBAFormat, THREE.FloatType);
+    environment.mapping = THREE.EquirectangularReflectionMapping; environment.needsUpdate = true;
+    const generator = new THREE.PMREMGenerator(gl), target = generator.fromEquirectangular(environment);
+    scene.environment = target.texture; scene.environmentIntensity = lighting.worldStrength;
+    invalidate();
+    return () => { scene.environment = null; scene.environmentIntensity = 1; target.dispose(); generator.dispose(); environment.dispose(); };
+  }, [props.scene.lighting, gl, scene, invalidate]);
+  const sampleCamera = (): CameraSpec => ({
+    position: camera.position.toArray(),
+    target: orbit.current?.target.toArray() || [0, 0, 0],
+    up: camera.up.toArray(),
+    fov: (camera as THREE.PerspectiveCamera).fov,
+    aspect: (camera as THREE.PerspectiveCamera).aspect,
+  });
   const orbit = useRef<any>(null);
   const transform = useRef<any>(null);
   const [group, setGroup] = useState<THREE.Group | null>(null);
@@ -101,7 +135,47 @@ function Content({
           aspect: (camera as THREE.PerspectiveCamera).aspect,
         };
       },
-      screenshot: () => gl.domElement.toDataURL("image/png"),
+      sampleCamera,
+      restoreCamera: (c) => {
+        const controls = orbit.current;
+        if (controls) {
+          controls.enableDamping = false;
+          controls.update();
+        }
+        camera.position.fromArray(c.position);
+        camera.up.fromArray(c.up);
+        controls?.target.fromArray(c.target);
+        camera.lookAt(...c.target);
+        if (controls) {
+          controls.update();
+          controls.enableDamping = true;
+        }
+        invalidate();
+      },
+      drawVideo: (target) => {
+        gl.render(scene, camera);
+        const source = gl.domElement,
+          aspect = target.width / target.height,
+          sw = Math.min(source.width, source.height * aspect),
+          sh = sw / aspect;
+        target
+          .getContext("2d")!
+          .drawImage(
+            source,
+            (source.width - sw) / 2,
+            (source.height - sh) / 2,
+            sw,
+            sh,
+            0,
+            0,
+            target.width,
+            target.height,
+          );
+      },
+      screenshot: () => {
+        gl.render(scene, camera);
+        return gl.domElement.toDataURL("image/png");
+      },
       fit,
       view: (v) => {
         if (v === "perspective") {
@@ -174,13 +248,7 @@ function Content({
           if (node) {
             node.visible = o.visible;
             if (o.type === "LIGHT" && o.light) {
-              node.traverse((n) => {
-                if (n instanceof THREE.Light)
-                  n.intensity =
-                    o.light!.type === "SUN"
-                      ? o.light!.energy
-                      : Math.min(o.light!.energy * 0.025, 80);
-              });
+              applySceneLight(node, o.light);
             }
           }
         });
@@ -201,9 +269,6 @@ function Content({
         });
         setGroup(loaded);
         setObjects(map);
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => props.onReady?.()),
-        );
       },
       undefined,
       (e) => {
@@ -218,22 +283,37 @@ function Content({
   useEffect(() => {
     const cam = camera as THREE.PerspectiveCamera;
     // Keep the centered crop frame at a constant 42 degree vertical field of view.
-    const visibleFraction = props.frameAspect
+    const visibleFraction = !props.imageAspect && props.frameAspect
       ? Math.min(1, size.width / size.height / props.frameAspect)
       : 1;
     cam.fov = THREE.MathUtils.radToDeg(
       2 *
         Math.atan(Math.tan(THREE.MathUtils.degToRad(42 / 2)) / visibleFraction),
     );
+    cam.aspect = props.imageAspect || size.width / size.height;
     cam.updateProjectionMatrix();
     invalidate();
-  }, [props.frameAspect, size.width, size.height]);
+  }, [props.frameAspect, props.imageAspect, size.width, size.height]);
   const fitted = useRef(false);
   useEffect(() => {
     if (group && !fitted.current) {
       fit();
       fitted.current = true;
     }
+  }, [group]);
+  const readyCallback = useRef(props.onReady);
+  readyCallback.current = props.onReady;
+  useEffect(() => {
+    if (!group) return;
+    // Wait for the React scene commit and fitted camera, not just GLB decoding.
+    let nextFrame = 0;
+    const frame = requestAnimationFrame(() => {
+      nextFrame = requestAnimationFrame(() => readyCallback.current?.());
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      cancelAnimationFrame(nextFrame);
+    };
   }, [group]);
   const selected =
     !props.readOnly && props.selected ? objects.get(props.selected) : undefined;
@@ -274,10 +354,12 @@ function Content({
   }, [selected, group]);
   return (
     <>
-      <color attach="background" args={["#f8f8f6"]} />
-      <ambientLight intensity={1.2} />
-      <directionalLight position={[4, 7, 5]} intensity={2.5} />
-      <directionalLight position={[-4, 3, -3]} intensity={1} />
+      {!props.transparentPreview && <color attach="background" args={["#f8f8f6"]} />}
+      {!props.scene.lighting && <>
+        <ambientLight intensity={1.2} />
+        <directionalLight position={[4, 7, 5]} intensity={2.5} />
+        <directionalLight position={[-4, 3, -3]} intensity={1} />
+      </>}
       {!props.readOnly && (
         <Grid
           infiniteGrid
@@ -329,6 +411,7 @@ function Content({
       )}
       <OrbitControls
         ref={orbit}
+        enabled={props.controlsEnabled ?? true}
         makeDefault
         enableDamping
         dampingFactor={0.1}
@@ -388,15 +471,17 @@ function Content({
           }}
         />
       )}
-      <GizmoHelper
-        alignment="top-right"
-        margin={[58, Math.min(160, size.height * 0.15)]}
-      >
-        <GizmoViewport
-          axisColors={["#dc655e", "#6ba684", "#6398eb"]}
-          labelColor="#fff"
-        />
-      </GizmoHelper>
+      {!props.hideGizmo && (
+        <GizmoHelper
+          alignment="top-right"
+          margin={[58, Math.min(160, size.height * 0.15)]}
+        >
+          <GizmoViewport
+            axisColors={["#dc655e", "#6ba684", "#6398eb"]}
+            labelColor="#fff"
+          />
+        </GizmoHelper>
+      )}
     </>
   );
 }

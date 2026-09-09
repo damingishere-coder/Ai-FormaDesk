@@ -59,11 +59,14 @@ export function revision(id: string) {
   if (!r) throw Object.assign(new Error("版本不存在"), { statusCode: 404 });
   return r;
 }
-export function activeJob(pid: string) {
+export function activeJob(pid: string, includePreview = true) {
+  const jobs = list<Job>("job", pid);
   return (
-    list<Job>("job", pid).find(
+    jobs.find(
+      (j) => j.type !== "preview" && (j.status === "queued" || j.status === "running"),
+    ) || (includePreview && jobs.find(
       (j) => j.status === "queued" || j.status === "running",
-    ) || null
+    )) || null
   );
 }
 export function addMessage(
@@ -91,6 +94,9 @@ export function latestRender(pid: string) {
   return list<Render>("render", pid).at(-1) || null;
 }
 export function recoverInterrupted() {
+  for (const r of list<Revision>("revision"))
+    if (r.preview?.status === "processing")
+      put("revision", { ...r, preview: { ...r.preview, status: "failed", error: "后台已重启，基础预览保留，可继续生成细节。" } });
   for (const j of list<Job>("job"))
     if (["queued", "running"].includes(j.status))
       put("job", {

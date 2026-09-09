@@ -14,11 +14,22 @@
     "check:environment": "tsx scripts/check-environment.ts",
     "test:integration": "tsx scripts/integration.ts",
     "format": "prettier --write src server/*.ts scripts tests *.ts",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "setup:blender-mcp": "tsx scripts/setup-blender-mcp.ts",
+    "desktop:prepare": "npm run build && node scripts/build-desktop.mjs",
+    "desktop:dev": "npm run desktop:prepare && electron .",
+    "desktop:pack": "npm run desktop:prepare && electron-builder --dir",
+    "desktop:dist": "npm run desktop:prepare && electron-builder --mac",
+    "test:desktop": "node scripts/verify-desktop.mjs",
+    "desktop:icons": "node scripts/build-app-icons.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
     "@fastify/static": "^10.1.3",
+    "@gltf-transform/core": "^4.5.0",
+    "@gltf-transform/extensions": "^4.5.0",
+    "@gltf-transform/functions": "^4.5.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.3.0",
     "better-sqlite3": "^12.2.0",
@@ -38,10 +49,17 @@
     "@types/react-dom": "^19.1.9",
     "@types/three": "^0.180.0",
     "@vitejs/plugin-react": "^5.0.2",
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "gltf-validator": "^2.0.0-dev.3.10",
     "prettier": "^3.9.6",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "vite": "^7.1.4",
     "vitest": "^3.2.4"
-  }
+  },
+  "main": "desktop/main.cjs",
+  "description": "用自然语言创作、编辑和导出真实 Blender 场景的 macOS 桌面工作台",
+  "author": "Ai-FormaDesk contributors"
 }

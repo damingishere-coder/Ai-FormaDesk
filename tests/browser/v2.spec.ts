@@ -222,12 +222,12 @@ test("真实模型可旋转预览、切换相机保持及图片导出设置", as
       json: { error: "相机捕获测试，不启动渲染" },
     });
   });
-  await page.getByRole("button", { name: "渲染出图", exact: true }).click();
+  await page.getByRole("button", { name: "导出", exact: true }).click();
   await page.getByLabel("画面比例").selectOption("portrait");
   await expect(page.getByLabel("图片宽度")).toHaveValue("720");
   await expect(page.getByLabel("图片高度")).toHaveValue("1280");
   await page.getByRole("checkbox").check();
-  await page.getByRole("button", { name: "按当前视角渲染" }).click();
+  await page.getByRole("button", { name: "生成图片" }).click();
   await expect.poll(() => cameras.length).toBe(1);
   expect(cameras[0].settings).toEqual({
     width: 720,
@@ -236,17 +236,17 @@ test("真实模型可旋转预览、切换相机保持及图片导出设置", as
   });
   expect(cameras[0].camera.fov).toBe(42);
   await page.getByRole("button", { name: "关闭提示" }).click();
-  await page.getByRole("button", { name: "关闭导出" }).click();
+  await page.getByRole("button", { name: "返回工作台" }).click();
   await page.getByRole("button", { name: "编辑", exact: true }).click();
   await page.getByRole("button", { name: "预览", exact: true }).click();
-  await page.getByRole("button", { name: "渲染出图", exact: true }).click();
-  await page.getByRole("button", { name: "按当前视角渲染" }).click();
+  await page.getByRole("button", { name: "导出", exact: true }).click();
+  await page.getByRole("button", { name: "生成图片" }).click();
   await expect.poll(() => cameras.length).toBe(2);
   expect(cameras[1].camera.position).toEqual(cameras[0].camera.position);
   expect(cameras[1].camera.target).toEqual(cameras[0].camera.target);
   await page.getByRole("button", { name: "关闭提示" }).click();
   await page.screenshot({ path: path.join(evidence, "export-settings.png") });
-  await page.getByRole("button", { name: "关闭导出" }).click();
+  await page.getByRole("button", { name: "返回工作台" }).click();
   await page.getByRole("button", { name: "查看成品图", exact: true }).click();
   await expect(
     page.getByRole("dialog", { name: "Blender 成品图" }),
@@ -308,11 +308,11 @@ test("真实浏览器：参考图讨论、方案执行、渲染与下载", async
   await page.mouse.move(850, 340, { steps: 12 });
   await page.mouse.up();
   await page.waitForTimeout(500);
-  await page.getByRole("button", { name: "渲染出图", exact: true }).click();
+  await page.getByRole("button", { name: "导出", exact: true }).click();
   await page.getByLabel("图片宽度").fill("512");
   await page.getByLabel("图片高度").fill("512");
   await page.getByRole("checkbox").check();
-  await page.getByRole("button", { name: "按当前视角渲染" }).click();
+  await page.getByRole("button", { name: "生成图片" }).click();
   await expect(
     page.getByRole("dialog", { name: "Blender 成品图" }),
   ).toBeVisible({ timeout: 240000 });

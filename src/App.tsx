@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { BlenderLink } from "./BlenderLink";
+import {VideoRecorder} from "./VideoRecorder";
+import type {VideoSettings} from "./types";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   Box,
   ChevronDown,
@@ -6,7 +9,6 @@ import {
   Undo2,
   Redo2,
   Download,
-  Image,
   MousePointer2,
   Move,
   RotateCw,
@@ -23,13 +25,18 @@ import {
   Lightbulb,
   CheckCircle2,
   Maximize,
+  MessageSquare,
 } from "lucide-react";
 import { api } from "./api";
 import { Viewport, type ViewportHandle } from "./Viewport";
 import { Inspector } from "./Inspector";
 import { Composer } from "./Composer";
 import { ProjectLibrary } from "./ProjectLibrary";
-import { ExportPanel } from "./ExportPanel";
+import { ExportPanel, type ExportTab } from "./ExportPanel";
+import { VideoExport, defaultVideoSettings, validVideoSettings } from "./VideoExport";
+import { RenderPreview } from "./RenderPreview";
+import { CompositionToolbar, ImageExport } from "./ImageExport";
+import { validImageSettings } from "./imageComposition";
 import {
   defaultRenderSettings,
   type RenderSettings,
@@ -37,6 +44,7 @@ import {
   type Proposal,
 } from "./types";
 import type { Project, Snapshot, Job, SceneCommand, Revision } from "./types";
+import { VisualReferences } from "./VisualReferences";
 const terminal = (j: Job) =>
   ["succeeded", "failed", "cancelled"].includes(j.status);
 const shortDate = (s: string) =>
@@ -56,7 +64,7 @@ export function App() {
     ),
     [panel, setPanel] = useState(""),
     [prompt, setPrompt] = useState(""),
-    [job, setJob] = useState<Job | null>(null),
+    [job, setJobState] = useState<Job | null>(null),
     [submitting, setSubmitting] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
@@ -64,8 +72,57 @@ export function App() {
     [renderView, setRenderView] = useState(false),
     [view, setView] = useState("perspective"),
     [reloadKey, setReloadKey] = useState(0);
+  const [recording,setRecording]=useState<VideoSettings|null>(null);
+  const [previewStatus,setPreviewStatus]=useState<'loading'|'ready'|'failed'>('loading');
+  const jobRef = useRef<Job | null>(null);
+  const loadSequence = useRef(0);
+  const setJob = useCallback((value: Job | null) => {
+    jobRef.current = value;
+    setJobState(value);
+  }, []);
+  const [previewRevision,setPreviewRevision]=useState<string|null>(null);
+  const [disconnected,setDisconnected]=useState(false);
   const [chatExpanded, setChatExpanded] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [chatHidden, setChatHidden] = useState(() => localStorage.getItem("forma-chat-hidden") === "true");
+  const [chatUnread, setChatUnread] = useState(false);
+  const lastReply = snapshot?.messages.filter(m => m.role === "assistant").at(-1);
+  const seenReply = useRef<{ pid: string; key: string } | null>(null);
+  useEffect(() => {
+    localStorage.setItem("forma-chat-hidden", String(chatHidden));
+  }, [chatHidden]);
+  useEffect(() => {
+    if (!snapshot) return;
+    const key = lastReply ? `${pid}:${lastReply.id}:${lastReply.status}:${lastReply.text}` : "";
+    if (chatHidden && seenReply.current?.pid === pid && key && key !== seenReply.current.key && lastReply?.status !== "pending") setChatUnread(true);
+    seenReply.current = { pid, key };
+  }, [pid, snapshot, lastReply?.id, lastReply?.status, lastReply?.text, chatHidden]);
+  function changeChatExpanded(expanded: boolean) {
+    setChatExpanded(expanded);
+    if (expanded && !chatHidden) {
+      setPanel("");
+      setInspectorOpen(false);
+    }
+  }
+  function showChat() {
+    setChatHidden(false);
+    setChatUnread(false);
+    setChatExpanded(true);
+    setPanel("");
+    setInspectorOpen(false);
+  }
+  function selectObject(id: string | null) {
+    setSelected(id);
+    setInspectorOpen(!!id);
+    setPanel(current => current === "scene" ? current : "");
+    setRenderView(false);
+    setChatExpanded(false);
+  }
   const [showRender, setShowRender] = useState(false);
+  const [imageExport, setImageExport] = useState(false);
+  const [exportTab, setExportTab] = useState<ExportTab>("image");
+  const [videoSettings, setVideoSettings] = useState<VideoSettings>(defaultVideoSettings);
+  const entryCamera = useRef<CameraSpec | null>(null);
   const [settings, setSettings] = useState<RenderSettings>(
     defaultRenderSettings,
   );
@@ -79,15 +136,23 @@ export function App() {
     currentPid = useRef(pid),
     submitLock = useRef(false);
   currentPid.current = pid;
-  const busy = submitting || (!!job && !terminal(job));
+  const busy = submitting || (!!job && job.type !== "preview" && !terminal(job));
   const object = snapshot?.scene.objects.find((o) => o.id === selected);
   const base = snapshot?.project.currentRevisionId || null;
+  useEffect(() => {
+    if (imageExport && previewStatus === "ready" && previewRevision === base && !entryCamera.current) {
+      entryCamera.current = viewport.current?.camera() || null;
+    }
+  }, [imageExport, previewStatus, previewRevision, base]);
   const load = useCallback(async (id: string) => {
+    const sequence = ++loadSequence.current;
+    const observedJob = jobRef.current?.id;
     const v = await api<Snapshot>(`/projects/${id}/scene`);
-    if (currentPid.current !== id) return;
+    if (currentPid.current !== id || sequence !== loadSequence.current || jobRef.current?.id !== observedJob) return;
     setSnapshot(v);
     setSelected((s) => (v.scene.objects.some((o) => o.id === s) ? s : null));
     if (v.activeJob) setJob(v.activeJob);
+    else setJob(v.jobs?.at(-1) || null);
     return v;
   }, []);
   const loadProjects = async () => {
@@ -128,9 +193,15 @@ export function App() {
     setSnapshot(null);
     setJob(null);
     setSelected(null);
+    setInspectorOpen(false);
     setRenderView(false);
     setShowRender(false);
+    setImageExport(false);
+    setExportTab("image");
+    setVideoSettings(defaultVideoSettings);
+    entryCamera.current = null;
     setChatExpanded(false);
+    setChatUnread(false);
     setSettings(defaultRenderSettings);
     setReloadKey(0);
     void load(pid).catch((e) => setError(e.message));
@@ -151,15 +222,17 @@ export function App() {
     let disposed = false;
     let ending = false;
     const receive = async (j: Job) => {
-      if (disposed || currentPid.current !== p) return;
+      if (disposed || currentPid.current !== p || jobRef.current?.id !== jid || (j.type === "preview" && submitLock.current)) return;
+      setDisconnected(false);
       setJob(j);
       if (terminal(j) && !ending) {
         ending = true;
         setSubmitting(false);
         submitLock.current = false;
-        if (j.type !== "discuss" && j.type !== "render")
+        if (j.type !== "discuss" && j.type !== "render" && j.type !== "video")
           setReloadKey((k) => k + 1);
-        await load(p);
+        await load(p).catch(e => setError("刷新任务状态失败：" + e.message));
+        if (disposed || currentPid.current !== p || jobRef.current?.id !== jid) return;
         if (j.status === "succeeded") {
           if (j.type !== "discuss")
             setNotice(
@@ -178,6 +251,8 @@ export function App() {
     const source = new EventSource(`/api/jobs/${jid}/events`);
     source.onmessage = (e) => void receive(JSON.parse(e.data));
     source.onerror = () => {
+      if (disposed || ending) return;
+      setDisconnected(true);
       void api<Job>(`/jobs/${jid}`)
         .then(receive)
         .catch((e) => setError(e.message));
@@ -198,7 +273,11 @@ export function App() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (document.querySelector(".project-library")) return;
+      if (recording||document.querySelector(".project-library")) return;
+      if (imageExport) {
+        if (e.key === "Escape") setImageExport(false);
+        return;
+      }
       if (
         target.closest("input,textarea,select,[contenteditable=true]") ||
         busy
@@ -223,7 +302,7 @@ export function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [busy]);
+  }, [busy,recording,imageExport]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(""), 5000);
@@ -249,7 +328,7 @@ export function App() {
       if (currentPid.current === taskPid) {
         setError((e as Error).message);
         await load(taskPid).catch(() => {});
-        setReloadKey((k) => k + 1);
+        if (endpoint !== "render") setReloadKey((k) => k + 1);
       }
       return false;
     } finally {
@@ -268,6 +347,8 @@ export function App() {
     );
   }
   async function buildProposal(proposal: Proposal) {
+    setChatExpanded(true);
+    setPreviewStatus("loading");
     await startJob("generate", { proposalId: proposal.id });
   }
   async function command(c: Partial<SceneCommand>, id = selected) {
@@ -278,9 +359,13 @@ export function App() {
     action: "undo" | "redo" | "restore",
     revisionId?: string,
   ) {
-    if (busy) return;
+    if (busy || submitLock.current || !snapshot) return;
+    if (action === "undo" && !base) return;
+    if (action === "redo" && !snapshot.project.redo.length) return;
+    submitLock.current = true;
     setSubmitting(true);
     setError("");
+    setNotice("");
     try {
       await api(`/projects/${pid}/restore`, {
         baseRevisionId: base,
@@ -289,36 +374,63 @@ export function App() {
       });
       await load(pid);
       setReloadKey((k) => k + 1);
-      setNotice("已切换到保存版本");
+      setPanel("");
+      setNotice(
+        action === "undo" ? "已撤销上一步" :
+        action === "redo" ? "已重做一步" : "已恢复所选版本",
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setSubmitting(false);
+      submitLock.current = false;
     }
   }
   async function openPanel(name: string) {
+    if (name === "inspector") {
+      setInspectorOpen(open => !open);
+      setChatExpanded(false);
+      setRenderView(false);
+      return;
+    }
+    if (panel !== name) setChatExpanded(false);
+    if (name === "scene" || name === "inspector") setRenderView(false);
     setPanel(panel === name ? "" : name);
     if (name === "history")
       setRevisions(await api(`/projects/${pid}/revisions`));
     if (name === "projects") await loadProjects();
   }
   async function render() {
-    if (!base || !viewport.current) return;
+    if (!base || !viewport.current || !imageExport || exportTab !== "image" || recording || !validImageSettings(settings)) return;
+    const camera = viewport.current.camera();
+    if (Math.abs(camera.aspect - settings.width / settings.height) > 0.001) {
+      setError("取景画面正在更新，请稍后再生成图片。");
+      return;
+    }
     await startJob("render", {
       baseRevisionId: base,
-      camera: {
-        ...viewport.current.camera(),
-        fov: 42,
-        aspect: settings.width / settings.height,
-      },
-      settings,
+      camera,
+      settings: { ...settings },
     });
+  }
+  function openImageExport() {
+    if (!imageExport) entryCamera.current = previewStatus === "ready" && previewRevision === base ? viewport.current?.camera() || null : null;
+    setPanel("");
+    setShowRender(false);
+    setChatExpanded(false);
+    setImageExport(true);
+    setExportTab("image");
+    setError("");
   }
   const saved = !!snapshot && !busy;
   const frameAspect =
     settings.width > 0 && settings.height > 0
       ? settings.width / settings.height
       : 16 / 9;
+  const compositionAspect = exportTab === "video"
+    ? validVideoSettings(videoSettings) ? videoSettings.width / videoSettings.height : 16 / 9
+    : validImageSettings(settings) ? frameAspect : 16 / 9;
+  const transparentExport = imageExport && exportTab === "image" && settings.transparent;
   const imageSettings = snapshot?.render?.settings || defaultRenderSettings;
   const renderStale =
     !!snapshot?.render &&
@@ -332,11 +444,11 @@ export function App() {
           ),
         )));
   return (
-    <div className="workbench">
+    <div className={"workbench "+(recording?"is-recording ":"")+(renderView?"is-preview ":"")+(imageExport?"is-image-export":"")} style={{ "--output-aspect": compositionAspect } as CSSProperties}>
       <header className="topbar">
         <a className="brand" href="/" aria-label="Ai-FormaDesk 首页">
           <span className="brand-mark">
-            <Box size={26} strokeWidth={1.45} />
+            <img src="/app-icon.png" alt="" width={36} height={36} />
           </span>
           <span>Ai-FormaDesk</span>
         </a>
@@ -357,46 +469,35 @@ export function App() {
           ) : (
             <CheckCircle2 size={15} />
           )}
-          <span>{busy ? "处理中" : base ? "已保存" : "空白项目"}</span>
+          <span>{busy ? "处理中" : base ? snapshot?.revision?.preview && snapshot.revision.preview.status !== "ready" ? "已保存 · 基础预览" : "已保存" : "空白项目"}</span>
         </span>
         <div className="top-actions">
+          {snapshot && <BlenderLink pid={pid} objectId={selected} base={base} busy={busy} onJob={j => { setJob(j); void load(pid); }} onError={setError} />}
+          {snapshot && <VisualReferences key={snapshot.project.id} jobs={[...(snapshot.jobs || []), ...(job?.visual ? [job] : [])]} current={snapshot.revision?.visual} />}
+          <div className="history-controls" role="group" aria-label="撤销与重做">
           <button
-            className="icon"
+            className="history-control"
             aria-label="撤销"
+            title={base ? "撤销上一步" : "没有可撤销的操作"}
             disabled={busy || !base}
             onClick={() => void history("undo")}
           >
-            <Undo2 size={20} />
+            <Undo2 size={18} />
           </button>
           <button
-            className="icon"
+            className="history-control"
             aria-label="重做"
+            title={snapshot?.project.redo.length ? "重做刚撤销的操作" : "没有可重做的操作"}
             disabled={busy || !snapshot?.project.redo.length}
             onClick={() => void history("redo")}
           >
-            <Redo2 size={20} />
+            <Redo2 size={18} />
           </button>
-          <span className="action-separator" />
-          <button
-            className="button"
-            disabled={!base || busy}
-            onClick={() => {
-              setRenderView(true);
-              setChatExpanded(false);
-              void openPanel("render");
-            }}
-          >
-            <Image size={16} />
-            渲染出图
-          </button>
+          </div>
           <button
             className="button dark"
             disabled={!base}
-            onClick={() => {
-              setRenderView(true);
-              setChatExpanded(false);
-              void openPanel("export");
-            }}
+            onClick={openImageExport}
           >
             <Download size={16} />
             导出
@@ -406,8 +507,10 @@ export function App() {
       <main
         className="canvas-stage"
         aria-label="三维工作画布"
-        onPointerDown={() => setChatExpanded(false)}
+        onPointerDown={() => {if(!recording&&document.querySelector('.composer-wrap')?.getAttribute("data-moved")!=="true")setChatExpanded(false)}}
       >
+        {imageExport && <CompositionToolbar disabled={busy || !!recording || previewStatus !== "ready"} onView={v => viewport.current?.view(v)} onReset={() => { if(entryCamera.current) viewport.current?.restoreCamera(entryCamera.current); }} />}
+        <div className={"viewport-surface" + (transparentExport ? " transparent" : "")}>
         {snapshot && (
           <Viewport
             key={pid}
@@ -419,19 +522,30 @@ export function App() {
             }
             scene={snapshot.scene}
             selected={selected}
-            readOnly={renderView}
+            readOnly={renderView||!!recording||imageExport}
+            hideGizmo={!!recording||imageExport}
+            controlsEnabled={!imageExport || !busy}
+            imageAspect={imageExport ? compositionAspect : undefined}
+            transparentPreview={transparentExport}
             onCameraChange={onCameraChange}
-            frameAspect={renderView ? frameAspect : undefined}
-            onSelect={setSelected}
+            frameAspect={imageExport ? undefined : recording?recording.width/recording.height:renderView ? frameAspect : undefined}
+            onSelect={id=>{if(!recording&&!imageExport)selectObject(id)}}
             mode={mode}
             busy={busy}
             onTransform={(id, t) =>
               void command({ operation: "transform", transform: t }, id)
             }
-            onError={setError}
+            onReady={()=>{setPreviewRevision(base);setPreviewStatus('ready')}}
+            onError={(message)=>{setError(message);setPreviewRevision(base);setPreviewStatus('failed')}}
           />
         )}
+        </div>
+        {imageExport && !recording && <p className="composition-canvas-hint"><span>{exportTab === "model" ? "完整场景预览 · 下载包含全部模型" : `${exportTab === "video" ? videoSettings.width : settings.width || "—"} × ${exportTab === "video" ? videoSettings.height : settings.height || "—"} · 画面内即为输出范围`}</span>拖动旋转 · 滚轮缩放 · 右键拖动平移</p>}
       </main>
+      {imageExport && snapshot && <ExportPanel snapshot={snapshot} tab={exportTab} onTab={setExportTab} locked={!!recording} onClose={() => setImageExport(false)}>
+        {exportTab === "image" && <ImageExport snapshot={snapshot} settings={settings} onSettings={setSettings} busy={busy} ready={previewRevision === base ? previewStatus : "loading"} job={job} error={error} stale={renderStale} onRender={() => void render()} onViewImage={() => setShowRender(true)} onReload={() => {setPreviewStatus("loading");setReloadKey(k=>k+1);}} />}
+        {exportTab === "video" && <VideoExport snapshot={{...snapshot, activeJob:job&&!terminal(job)?job:null}} settings={videoSettings} onSettings={setVideoSettings} recording={!!recording} ready={previewRevision===base?previewStatus:"loading"} onReload={()=>{setPreviewStatus("loading");setReloadKey(k=>k+1)}} busy={busy} onRecord={s=>setRecording({...s})} onJob={j=>{setJob(j);void load(pid)}} />}
+      </ExportPanel>}
       {renderView && base && (
         <div className="preview-label glass">
           实时材质预览 · 拖动旋转
@@ -454,44 +568,14 @@ export function App() {
         </div>
       )}
       {showRender && snapshot?.render && (
-        <div
-          className="render-lightbox"
-          role="dialog"
-          aria-label="Blender 成品图"
-          onClick={() => setShowRender(false)}
-        >
-          <button
-            className="round glass"
-            aria-label="关闭成品图"
-            onClick={() => setShowRender(false)}
-          >
-            <X />
-          </button>
-          <img
-            src={`/api/artifacts/${snapshot.render.artifactId}`}
-            alt="Blender 成品图"
-            onClick={(e) => e.stopPropagation()}
-          />
-          <div
-            className={"render-caption " + (renderStale ? "stale" : "")}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {renderStale
-              ? "需要重新渲染 · 场景、视角或设置已变化"
-              : "Blender · EEVEE"}
-            <span>
-              {imageSettings.width} × {imageSettings.height} ·{" "}
-              {imageSettings.transparent ? "透明背景" : "不透明背景"} · 版本{" "}
-              {snapshot.render.revisionId.slice(0, 8)}
-            </span>
-            <a
-              className="button"
-              href={`/api/artifacts/${snapshot.render.artifactId}?download=1`}
-            >
-              下载原图
-            </a>
-          </div>
-        </div>
+        <RenderPreview
+          key={snapshot.render.artifactId}
+          render={snapshot.render}
+          stale={renderStale}
+          returnLabel={imageExport ? "返回取景页" : "返回工作台"}
+          onClose={() => setShowRender(false)}
+          onSettings={openImageExport}
+        />
       )}
       <div className="mode-switch glass">
         <button
@@ -503,7 +587,7 @@ export function App() {
         <button
           className={renderView ? "active" : ""}
           disabled={!base}
-          onClick={() => setRenderView(true)}
+          onClick={() => {setRenderView(true);setPanel("");setChatExpanded(false)}}
         >
           预览
         </button>
@@ -522,7 +606,7 @@ export function App() {
           <p>聊聊想法，放入参考图，一起把细节想清楚。</p>
           <button
             className="example"
-            onClick={() => setPrompt("做一张木桌，桌上放一盏绿色台灯。")}
+            onClick={() => {showChat();setPrompt("做一张木桌，桌上放一盏绿色台灯。")}}
           >
             试试「木桌和绿色台灯」
             <ArrowUp size={14} />
@@ -548,6 +632,15 @@ export function App() {
               <t.icon size={22} strokeWidth={1.6} />
             </button>
           ))}
+          <button
+            className={"tool " + (inspectorOpen && object ? "active" : "")}
+            aria-label="对象属性"
+            title="对象属性"
+            disabled={!object}
+            onClick={() => void openPanel("inspector")}
+          >
+            <Settings2 size={22} strokeWidth={1.6} />
+          </button>
           <span />
           <button
             className="tool"
@@ -559,12 +652,12 @@ export function App() {
           </button>
         </nav>
       )}
-      {object && !renderView && (
+      {object && !renderView && inspectorOpen && (
         <Inspector
           key={object.id}
           object={object}
           busy={busy}
-          onClose={() => setSelected(null)}
+          onClose={() => setInspectorOpen(false)}
           onCommand={(c) => void command(c)}
         />
       )}
@@ -593,11 +686,16 @@ export function App() {
           snapshot={snapshot}
           busy={busy}
           job={job}
+          preview={previewRevision===base?previewStatus:'loading'}
+          disconnected={disconnected}
+          onReload={()=>{setPreviewStatus('loading');setReloadKey(k=>k+1)}}
           aiReady={!!health?.codex?.ok}
           modelReady={!!health?.ok}
           selected={selected}
           expanded={chatExpanded}
-          onExpanded={setChatExpanded}
+          hidden={chatHidden}
+          onHide={() => {setChatHidden(true);setChatExpanded(false)}}
+          onExpanded={changeChatExpanded}
           onDiscuss={discuss}
           onBuild={(p) => void buildProposal(p)}
           onStop={() => {
@@ -609,11 +707,21 @@ export function App() {
           onHealth={() => void openPanel("health")}
           onError={setError}
           suggested={prompt}
+          onRetryJob={id => { setError(""); void api<Job>(`/jobs/${id}/retry`, {}).then(async j => { setJob(j); await load(pid); }).catch(e => setError(e.message)); }}
         />
+      )}
+      {snapshot && chatHidden && (
+        <button className="chat-launcher glass" aria-label="打开创作对话" onClick={showChat}>
+          {busy ? <Loader2 size={17} className="spin" /> : <MessageSquare size={17} />}
+          <span>{busy ? "任务进行中" : chatUnread ? "有新回复" : "创作对话"}</span>
+          {chatUnread && <i className="chat-unread" />}
+        </button>
       )}
       <div className="bottom-left">
         <button
           className={"button glass " + (panel === "scene" ? "pressed" : "")}
+          aria-expanded={panel === "scene"}
+          aria-controls="scene-objects"
           onClick={() => void openPanel("scene")}
         >
           <Layers size={17} />
@@ -623,9 +731,11 @@ export function App() {
         <button
           className="round glass"
           aria-label="版本历史"
+          title="查看并恢复历史版本"
+          disabled={!snapshot || busy}
           onClick={() => void openPanel("history")}
         >
-          <History size={20} />
+          <History size={17} />
         </button>
       </div>
       <div className="bottom-right">
@@ -661,7 +771,7 @@ export function App() {
         </div>
       </div>
       {panel === "scene" && (
-        <aside className="scene-popover glass">
+        <aside id="scene-objects" className="scene-popover glass" aria-label="场景对象">
           <header>
             <strong>场景对象</strong>
             <button
@@ -681,10 +791,7 @@ export function App() {
                   key={o.id}
                   className={o.id === selected ? "active" : ""}
                   data-object-id={o.id}
-                  onClick={() => {
-                    setSelected(o.id);
-                    setRenderView(false);
-                  }}
+                  onClick={() => selectObject(o.id)}
                   style={{ paddingLeft: o.parentId ? 26 : 12 }}
                 >
                   {o.type === "LIGHT" ? (
@@ -720,22 +827,7 @@ export function App() {
           onError={setError}
         />
       )}
-      {["export", "render"].includes(panel) && snapshot && (
-        <ExportPanel
-          snapshot={snapshot}
-          settings={settings}
-          onSettings={setSettings}
-          busy={busy}
-          stale={renderStale}
-          initial={panel === "render" ? "image" : "model"}
-          onRender={() => void render()}
-          onViewImage={() => {
-            setPanel("");
-            setShowRender(true);
-          }}
-          onClose={() => setPanel("")}
-        />
-      )}
+      {recording&&base&&<VideoRecorder embedded pid={pid} base={base} settings={recording} viewport={viewport} onClose={()=>{setRecording(null);setExportTab('video')}} onSaved={()=>void load(pid)} onRender={id=>startJob(`videos/${id}/render`,{})}/>}
       {["history", "health"].includes(panel) && (
         <div className="modal-backdrop" onClick={() => setPanel("")}>
           <section
@@ -758,7 +850,7 @@ export function App() {
                 {
                   {
                     projects: "你的作品",
-                    history: "每一步，都可以回去",
+                    history: "版本历史",
                     chat: "创作对话",
                     export: "带走你的作品",
                     health: "本地工作台检查",
@@ -776,7 +868,7 @@ export function App() {
             {panel === "history" && (
               <>
                 <p className="muted">
-                  每次成功修改保存一个独立版本。恢复后继续创作，原历史依然保留。
+                  选择要恢复的版本。只想回到上一步，可点击顶部的“撤销”。
                 </p>
                 <div className="revision-list">
                   {[...revisions].reverse().map((r) => (
@@ -785,7 +877,7 @@ export function App() {
                       <div>
                         <strong>{r.label}</strong>
                         <small>
-                          {shortDate(r.createdAt)} · {r.id.slice(0, 8)} ·{" "}
+                          {shortDate(r.createdAt)} ·{" "}
                           {r.source === "generate" ? "AI 建模" : "网页编辑"}
                         </small>
                       </div>

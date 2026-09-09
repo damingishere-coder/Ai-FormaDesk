@@ -1,11 +1,14 @@
 """Trusted Blender entrypoint. Z-up local transforms; glTF is Y-up.
 Generated code only runs in 'execute'. A fresh process reopens and validates it.
 """
-import bpy, sys, json, os, uuid, math
+import bpy, sys, json, os, uuid, math, hashlib
 from mathutils import Vector, Matrix
+sys.path.insert(0,os.path.dirname(__file__))
+from appearance import adjust_material,bake_portable,configure_world
 args=sys.argv[sys.argv.index('--')+1:]
 mode, directory=args[0], args[1]
 def file(name): return os.path.join(directory,name)
+identity_namespace=uuid.uuid5(uuid.NAMESPACE_URL,hashlib.sha256(open(file('raw.blend'),'rb').read()).hexdigest()) if mode=='validate' and os.path.exists(file('raw.blend')) else uuid.uuid4()
 def read(name):
     with open(file(name),encoding='utf8') as f: return json.load(f)
 def write(name,value):
@@ -15,7 +18,7 @@ def open_scene(name):
 def identity(obj):
     val=obj.get('forma_id')
     try: uuid.UUID(str(val))
-    except (ValueError,TypeError,AttributeError): val=str(uuid.uuid4());obj['forma_id']=val
+    except (ValueError,TypeError,AttributeError): val=str(uuid.uuid5(identity_namespace,obj.name));obj['forma_id']=val
     return val
 def srgb(v): return 12.92*v if v<=.0031308 else 1.055*v**(1/2.4)-.055
 def linear(v): return v/12.92 if v<=.04045 else ((v+.055)/1.055)**2.4
@@ -27,6 +30,8 @@ def mat_node(mat):
     return next((n for n in mat.node_tree.nodes if n.type=='BSDF_PRINCIPLED'),None)
 def material(obj):
     n=mat_node(obj.active_material) if hasattr(obj,'active_material') else None
+    if n and obj.active_material.get('forma_controls'):
+        return json.loads(obj.active_material['forma_controls'])
     return None if not n else {'color':color_hex(n.inputs['Base Color'].default_value),'roughness':n.inputs['Roughness'].default_value,'metalness':n.inputs['Metallic'].default_value}
 def find(oid):
     obj=next((o for o in bpy.context.scene.objects if o.get('forma_id')==oid),None)
@@ -42,11 +47,12 @@ def normalize():
         oid=identity(obj)
         if oid in seen:obj['forma_id']=str(uuid.uuid4())
         seen.add(obj['forma_id'])
-        if obj.type=='LIGHT' and obj.data.type not in ('POINT','SUN'):obj.data.type='POINT'
+        if obj.type=='LIGHT' and obj.data.type not in ('POINT','SUN','AREA'):raise ValueError('不支持的灯光类型: '+obj.data.type)
         if obj.constraints:raise ValueError('V1 不支持对象约束，请将最终变换应用到对象')
         # Canonicalize parent inverse so browser-local and Blender-local TRS agree.
-        local=obj.matrix_local.copy();obj.matrix_parent_inverse=Matrix.Identity(4);obj.matrix_basis=local
-        obj.rotation_mode='XYZ'
+        if obj.parent and obj.matrix_parent_inverse!=Matrix.Identity(4):
+            local=obj.matrix_local.copy();obj.matrix_parent_inverse=Matrix.Identity(4);obj.matrix_basis=local
+        if obj.rotation_mode!='XYZ':obj.rotation_mode='XYZ'
         if obj.type not in ('MESH','EMPTY','LIGHT','CAMERA','CURVE','FONT','SURFACE','META'):raise ValueError('不支持的对象类型 '+obj.type)
     for img in bpy.data.images:
         w,h=img.size
@@ -58,15 +64,16 @@ def manifest():
     for obj in bpy.context.scene.objects:
         if obj.type=='MESH':
             verts+=len(obj.data.vertices);obj.data.calc_loop_triangles();tris+=len(obj.data.loop_triangles)
-        objects.append({'id':identity(obj),'name':obj.name,'type':obj.type,'parentId':identity(obj.parent) if obj.parent else None,'transform':{'position':list(obj.location),'rotation':list(obj.rotation_euler),'scale':list(obj.scale)},'matrix':[obj.matrix_local[r][c] for c in range(4) for r in range(4)],'visible':not obj.hide_render,'material':material(obj),'light':{'type':obj.data.type,'color':color_hex(obj.data.color),'energy':obj.data.energy} if obj.type=='LIGHT' else None})
+        objects.append({'id':identity(obj),'name':obj.name,'type':obj.type,'parentId':identity(obj.parent) if obj.parent else None,'transform':{'position':list(obj.location),'rotation':list(obj.rotation_euler),'scale':list(obj.scale)},'matrix':[obj.matrix_local[r][c] for c in range(4) for r in range(4)],'visible':not obj.hide_render,'material':material(obj),'light':{'type':obj.data.type,'color':color_hex(obj.data.color),'energy':obj.data.energy,**({'size':obj.data.size,'sizeY':obj.data.size_y if obj.data.shape in ('RECTANGLE','ELLIPSE') else obj.data.size} if obj.data.type=='AREA' else {})} if obj.type=='LIGHT' else None})
     if verts>2000000:raise ValueError('V1 场景超过 200 万顶点上限')
-    return {'objects':objects,'stats':{'objects':len(objects),'vertices':verts,'triangles':tris},'units':'meters','coordinates':'blender-z-up'}
+    return {'objects':objects,'stats':{'objects':len(objects),'vertices':verts,'triangles':tris},'units':'meters','coordinates':'blender-z-up',**({'lighting':json.loads(bpy.context.scene['forma_lighting'])} if bpy.context.scene.get('forma_lighting') else {})}
 if mode=='execute':
     if os.path.exists(file('base.blend')):open_scene('base.blend')
     else:
         bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False)
     with open(file('generated.py'),encoding='utf8') as f:code=compile(f.read(),'generated.py','exec')
-    exec(code,{'bpy':bpy,'__name__':'__main__'})
+    import modeling_helpers as forma
+    exec(code,{'bpy':bpy,'forma':forma,'__name__':'__main__'})
     bpy.ops.wm.save_as_mainfile(filepath=file('raw.blend'),check_existing=False)
 elif mode=='command':
     open_scene('base.blend');c=read('command.json');obj=find(c['objectId']);op=c['operation']
@@ -75,14 +82,14 @@ elif mode=='command':
     elif op=='material':
         if obj.type not in ('MESH','CURVE','FONT','SURFACE','META'):raise ValueError('此对象没有可编辑材质')
         if obj.data.users>1:obj.data=obj.data.copy()
-        mat=obj.active_material.copy() if obj.active_material else bpy.data.materials.new('网页材质')
-        mat.use_nodes=True
-        if len(obj.data.materials):obj.data.materials[obj.active_material_index]=mat
-        else:obj.data.materials.append(mat)
-        n=mat_node(mat);v=c['material']
-        for prop in ['Base Color','Roughness','Metallic']:
-            for link in list(n.inputs[prop].links):mat.node_tree.links.remove(link)
-        n.inputs['Base Color'].default_value=(*color_rgb(v['color']),1);n.inputs['Roughness'].default_value=v['roughness'];n.inputs['Metallic'].default_value=v['metalness']
+        group=obj.active_material.get('forma_surface_group') if obj.active_material else None
+        indices=[i for i,m in enumerate(obj.data.materials) if m and m.get('forma_surface_group')==group] if group else [obj.active_material_index]
+        for index in indices:
+            mat=obj.data.materials[index].copy() if len(obj.data.materials)>index and obj.data.materials[index] else bpy.data.materials.new('网页材质')
+            mat.use_nodes=True
+            if len(obj.data.materials)>index:obj.data.materials[index]=mat
+            else:obj.data.materials.append(mat)
+            adjust_material(mat,c['material'])
     elif op=='light':
         if obj.type!='LIGHT':raise ValueError('此对象不是灯光')
         if obj.data.users>1:obj.data=obj.data.copy()
@@ -105,19 +112,23 @@ elif mode=='command':
 elif mode=='validate':
     open_scene('raw.blend');normalize();m=manifest()
     bpy.context.preferences.filepaths.save_version=0
+    for image in bpy.data.images:
+        if image.source=='FILE' and image.has_data and not image.packed_file:image.pack()
     bpy.ops.wm.save_as_mainfile(filepath=file('scene.blend'),check_existing=False)
-    # GLB supports basic PBR; keep procedural nodes in the saved .blend,
-    # and use their explicit PBR fallback values in the web derivative.
-    for mat in bpy.data.materials:
-        n=mat_node(mat)
-        if n:
-            for prop in ['Base Color','Roughness','Metallic','Normal']:
-                for link in list(n.inputs[prop].links):
-                    if link.from_node.type not in ('TEX_IMAGE','NORMAL_MAP'):mat.node_tree.links.remove(link)
+    # Bake unsupported procedural graphs only in the portable derivative.
+    # The saved .blend above retains editable nodes and packed source images.
+    from portable import portable_materials
+    quality=args[2] if len(args)>2 else 'detail'
+    source_hash=hashlib.sha256(open(file('raw.blend'),'rb').read()).hexdigest()
+    budget=max(1,min(600,float(args[3]))) if len(args)>3 else 600
+    preview=portable_materials(list(bpy.context.scene.objects),directory=file('textures'),quality=quality,source_hash=source_hash,budget=budget)
+    write('preview.json',preview)
+    for ob in bpy.context.scene.objects:
+        if ob.type=='LIGHT' and ob.data.type=='AREA':ob.data=None
     # Export hidden objects too; visibility is carried by the authoritative manifest.
     hidden=[(o,o.hide_viewport,o.hide_render,o.hide_get()) for o in bpy.context.scene.objects]
     for o,_,_,_ in hidden:o.hide_viewport=False;o.hide_render=False;o.hide_set(False)
-    bpy.ops.export_scene.gltf(filepath=file('scene.glb'),export_format='GLB',export_extras=True,export_yup=True,export_lights=True,export_cameras=True,export_apply=True,export_animations=False,use_visible=False,use_renderable=False)
+    bpy.ops.export_scene.gltf(filepath=file('scene.glb'),export_format='GLB',export_extras=True,export_yup=True,export_lights=True,export_import_convert_lighting_mode='COMPAT',export_cameras=True,export_apply=True,export_animations=False,use_visible=False,use_renderable=False)
     write('scene.json',m)
 elif mode=='inspect':
     open_scene('scene.blend');write('inspection.json',manifest())
@@ -133,7 +144,8 @@ elif mode=='render':
     scene.render.film_transparent=bool(settings.get('transparent',False));scene.render.image_settings.color_mode='RGBA' if scene.render.film_transparent else 'RGB'
     if not scene.world:scene.world=bpy.data.worlds.new('世界')
     scene.world.use_nodes=True;bg=scene.world.node_tree.nodes.get('Background')
-    if bg:bg.inputs['Color'].default_value=(.75,.78,.82,1);bg.inputs['Strength'].default_value=.5
+    if bg and not scene.get('forma_lighting'):bg.inputs['Color'].default_value=(.75,.78,.82,1);bg.inputs['Strength'].default_value=.5
+    configure_world(scene)
     if not any(o.type=='LIGHT' for o in scene.objects):
         d=bpy.data.lights.new('预览补光','SUN');d.energy=2;o=bpy.data.objects.new('预览补光',d);scene.collection.objects.link(o);o.rotation_euler=(.45,-.5,-.5)
     bpy.ops.render.render(write_still=True)

@@ -1,0 +1,23 @@
+name: 问题反馈
+description: 帮助复现和修复工作台问题
+title: '[Bug] '
+body:
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本与 macOS 版本
+      placeholder: '例如：1.0.0 / macOS 26 / M2'
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 说明从哪里开始、点击了什么，以及预期和实际结果。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 错误信息或截图
+      description: 上传前请移除账号、Token、个人路径和私人参考图。

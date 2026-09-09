@@ -2,6 +2,13 @@ import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+export function registerVisualProcess(pid: number, registry: string, cwd: string) {
+  fs.mkdirSync(registry, { recursive: true });
+  const record = path.join(registry, randomUUID() + ".json");
+  const started = execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim();
+  fs.writeFileSync(record, JSON.stringify({ pid, started, cwd, kind: "codex-visual" }), { mode: 0o600 });
+  return () => fs.rmSync(record, { force: true });
+}
 export function runProcess(
   bin: string,
   args: string[],
@@ -72,8 +79,8 @@ export function runProcess(
       });
       p.on("close", (code, exitSignal) => {
         cleanup();
-        if (timeout) reject(new Error("执行超时，任务进程已停止"));
-        else if (options.signal?.aborted) reject(new Error("任务已取消"));
+        if (timeout) reject(Object.assign(new Error("执行超时，任务进程已停止"), { stdout, stderr }));
+        else if (options.signal?.aborted) reject(Object.assign(new Error("任务已取消"), { stdout, stderr }));
         else
           resolve({
             stdout,
@@ -106,8 +113,9 @@ export function reapInterruptedProcesses(registry: string) {
       ).trim();
       if (
         start === v.started &&
-        command.includes(v.cwd) &&
-        command.includes("Blender")
+        (v.kind === "codex-visual"
+          ? /(?:^|\/)codex\s+app-server\s/.test(command)
+          : command.includes(v.cwd) && command.includes("Blender"))
       )
         process.kill(-v.pid, "SIGKILL");
     } catch {

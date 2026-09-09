@@ -143,8 +143,7 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     await expect(
       page.getByRole("complementary", { name: "对象属性" }),
     ).toContainText(o.name);
-    await expect(page.locator(".selection-chip")).toContainText(o.name);
-    await page.getByRole("button", { name: "关闭场景列表" }).click();
+    await page.getByRole("button", { name: "关闭场景列表", exact: true }).click();
   }
   await select(lamp);
   const moved = lamp.transform.position[0] + 0.35;
@@ -269,9 +268,9 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
     .click()
     .catch(() => {});
   await page.getByRole("combobox", { name: "观察视角" }).selectOption("front");
-  await page.getByRole("button", { name: "渲染出图", exact: true }).click();
+  await page.getByRole("button", { name: "导出", exact: true }).click();
   await page
-    .getByRole("button", { name: "按当前视角渲染", exact: true })
+    .getByRole("button", { name: "生成图片", exact: true })
     .click();
   await expect
     .poll(
@@ -307,14 +306,18 @@ test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢�
   await page.getByRole("button", { name: "导出", exact: true }).click();
   for (const title of ["Blender 源文件", "通用三维模型", "下载原图"]) {
     if (title === "下载原图")
-      await page.getByRole("button", { name: "效果图", exact: true }).click();
+      await page.getByRole("tab", { name: "图片", exact: true }).click();
+    else {
+      await page.getByRole("tab", { name: "模型", exact: true }).click();
+      await page.getByRole("radio", { name: new RegExp(title) }).check();
+    }
     const download = page.waitForEvent("download");
-    await page.getByRole("link").filter({ hasText: title }).click();
+    await page.getByRole("link").filter({ hasText: title === "下载原图" ? title : "下载模型" }).click();
     const d = await download;
     await d.saveAs(path.join(evidence, d.suggestedFilename()));
     expect(await d.failure()).toBe(null);
   }
-  await page.getByRole("button", { name: "关闭导出" }).click();
+  await page.getByRole("button", { name: "返回工作台" }).click();
   fs.writeFileSync(
     path.join(evidence, "final-scene.json"),
     JSON.stringify(s, null, 2),

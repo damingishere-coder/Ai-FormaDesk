@@ -12,9 +12,9 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { forgetProjectDraft } from "./Composer";
-import { Viewport, type ViewportHandle } from "./Viewport";
+import { Viewport } from "./Viewport";
+import { ProjectCover } from "./ProjectCover";
 import type { Project, Snapshot } from "./types";
-const covers = new Map<string, string>();
 export function ProjectLibrary({
   currentId,
   onOpen,
@@ -41,10 +41,17 @@ export function ProjectLibrary({
     [confirm, setConfirm] = useState<Project | null>(null),
     [undo, setUndo] = useState<Project | null>(null),
     [mutating, setMutating] = useState(false);
-  const viewport = useRef<ViewportHandle>(null),
-    sequence = useRef(0),
-    latestPreview = useRef(previewId);
-  latestPreview.current = previewId;
+  const sequence = useRef(0);
+  const [coverErrors, setCoverErrors] = useState<Record<string, string>>({});
+  const pendingCover =
+    !trash && !previewId && !loading
+      ? projects.find(
+          (p) =>
+            p.currentRevisionId &&
+            !p.coverUrl &&
+            !coverErrors[p.currentRevisionId],
+        )
+      : undefined;
   async function refresh() {
     const seq = ++sequence.current;
     setLoading(true);
@@ -169,7 +176,6 @@ export function ProjectLibrary({
               ) : (
                 <Viewport
                   key={`${previewId}-${retry}`}
-                  ref={viewport}
                   url={preview.previewUrl}
                   scene={preview.scene}
                   selected={null}
@@ -179,15 +185,6 @@ export function ProjectLibrary({
                   readOnly
                   onTransform={() => {}}
                   onError={setPreviewError}
-                  onReady={() => {
-                    if (
-                      latestPreview.current === previewId &&
-                      preview.revision
-                    ) {
-                      const img = viewport.current?.screenshot();
-                      if (img) covers.set(preview.revision.id, img);
-                    }
-                  }}
                 />
               )}
             </div>
@@ -293,6 +290,21 @@ export function ProjectLibrary({
                 </button>
               </div>
             )}
+            {pendingCover && <p role="status">正在生成作品封面…</p>}
+            {Object.keys(coverErrors).length > 0 && (
+              <div role="status">
+                <span>部分封面未能保存：{Object.values(coverErrors)[0]}</span>
+                <button
+                  className="button"
+                  onClick={() => {
+                    setCoverErrors({});
+                    void refresh();
+                  }}
+                >
+                  重试封面
+                </button>
+              </div>
+            )}
             <div className="project-grid">
               {loading ? (
                 <div className="library-empty">
@@ -300,8 +312,7 @@ export function ProjectLibrary({
                 </div>
               ) : projects.length ? (
                 projects.map((p) => {
-                  const cover =
-                    p.coverUrl || covers.get(p.currentRevisionId || "");
+                  const cover = p.coverUrl;
                   return (
                     <article
                       className={`project-card ${currentId === p.id ? "current" : ""}`}
@@ -320,7 +331,7 @@ export function ProjectLibrary({
                             <Box size={44} strokeWidth={1} />
                             <span>
                               {p.currentRevisionId
-                                ? "三维作品 · 点击预览"
+                                ? "封面待生成 · 点击预览"
                                 : "想法待成形"}
                             </span>
                           </div>
@@ -454,8 +465,6 @@ export function ProjectLibrary({
                       "DELETE",
                     );
                     forgetProjectDraft(confirm.id);
-                    if (confirm.currentRevisionId)
-                      covers.delete(confirm.currentRevisionId);
                     if (undo?.id === confirm.id) setUndo(null);
                     setConfirm(null);
                   })
@@ -465,6 +474,28 @@ export function ProjectLibrary({
               </button>
             </div>
           </div>
+        )}
+        {pendingCover && (
+          <ProjectCover
+            key={pendingCover.currentRevisionId}
+            project={pendingCover}
+            onSaved={(coverUrl) =>
+              setProjects((items) =>
+                items.map((p) =>
+                  p.id === pendingCover.id &&
+                  p.currentRevisionId === pendingCover.currentRevisionId
+                    ? { ...p, coverUrl }
+                    : p,
+                ),
+              )
+            }
+            onError={(error) =>
+              setCoverErrors((errors) => ({
+                ...errors,
+                [pendingCover.currentRevisionId!]: error,
+              }))
+            }
+          />
         )}
       </section>
     </div>
