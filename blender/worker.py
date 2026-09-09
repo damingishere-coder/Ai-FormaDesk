@@ -4,7 +4,7 @@ Generated code only runs in 'execute'. A fresh process reopens and validates it.
 import bpy, sys, json, os, uuid, math, hashlib
 from mathutils import Vector, Matrix
 sys.path.insert(0,os.path.dirname(__file__))
-from appearance import adjust_material,bake_portable,configure_world
+from appearance import adjust_material,bake_portable,ensure_render_lighting
 args=sys.argv[sys.argv.index('--')+1:]
 mode, directory=args[0], args[1]
 def file(name): return os.path.join(directory,name)
@@ -142,12 +142,7 @@ elif mode=='render':
     scene.render.engine='BLENDER_EEVEE_NEXT'
     settings=c.get('settings',{});scene.render.resolution_x=settings.get('width',1280);scene.render.resolution_y=settings.get('height',720);scene.render.resolution_percentage=100;scene.render.image_settings.file_format='PNG';scene.render.filepath=file('render.png')
     scene.render.film_transparent=bool(settings.get('transparent',False));scene.render.image_settings.color_mode='RGBA' if scene.render.film_transparent else 'RGB'
-    if not scene.world:scene.world=bpy.data.worlds.new('世界')
-    scene.world.use_nodes=True;bg=scene.world.node_tree.nodes.get('Background')
-    if bg and not scene.get('forma_lighting'):bg.inputs['Color'].default_value=(.75,.78,.82,1);bg.inputs['Strength'].default_value=.5
-    configure_world(scene)
-    if not any(o.type=='LIGHT' for o in scene.objects):
-        d=bpy.data.lights.new('预览补光','SUN');d.energy=2;o=bpy.data.objects.new('预览补光',d);scene.collection.objects.link(o);o.rotation_euler=(.45,-.5,-.5)
+    ensure_render_lighting(scene)
     bpy.ops.render.render(write_still=True)
 else:raise ValueError('未知执行模式')
 print('FORMA_WORKER_OK',mode)

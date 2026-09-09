@@ -42,6 +42,12 @@ it("封面按版本落盘、刷新列表和撤销后可读，且不改变作品�
         .toBuffer()
     ).toString("base64");
   const first = await saveCover(pid, rid, image);
+  put("render", {
+    id: uid(),
+    projectId: pid,
+    revisionId: rid,
+    artifactId: "old-gray-render",
+  });
   expect(projectLibrary()[0].coverUrl).toBe(first.coverUrl);
   expect(get("project", pid)).toEqual(p);
   const artifact = get<any>("artifact", first.coverUrl.split("/").at(-1)!);
@@ -51,6 +57,13 @@ it("封面按版本落盘、刷新列表和撤销后可读，且不改变作品�
     format: "jpeg",
   });
   expect(await saveCover(pid, rid, image)).toEqual(first);
+  const cover = get<any>("cover", rid);
+  put("cover", { ...cover, styleVersion: 1 });
+  expect(projectLibrary()[0].coverUrl).toBeNull();
+  const refreshed = await saveCover(pid, rid, image);
+  expect(refreshed.coverUrl).not.toBe(first.coverUrl);
+  expect(fs.existsSync(artifact.path)).toBe(true);
+  put("cover", cover);
   put("project", { ...p, currentRevisionId: next });
   expect(projectLibrary()[0].coverUrl).toBeNull();
   put("project", p);

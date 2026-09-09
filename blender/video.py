@@ -2,7 +2,7 @@
 import bpy, sys, os, json, math, time
 from mathutils import Vector, Matrix
 sys.path.insert(0,os.path.dirname(__file__))
-from appearance import configure_world
+from appearance import ensure_render_lighting
 mode, root = sys.argv[sys.argv.index('--')+1:]
 def file(name): return os.path.join(root,name)
 def read(name):
@@ -24,12 +24,7 @@ else:
     bpy.ops.wm.open_mainfile(filepath=file('base.blend'),load_ui=False,use_scripts=False)
     scene=bpy.context.scene;scene.render.engine='BLENDER_EEVEE_NEXT';scene.render.resolution_x=settings['width'];scene.render.resolution_y=settings['height'];scene.render.resolution_percentage=100
     scene.render.film_transparent=False;scene.render.image_settings.file_format='PNG';scene.render.image_settings.color_mode='RGB'
-    if not scene.world:scene.world=bpy.data.worlds.new('世界')
-    scene.world.use_nodes=True;bg=scene.world.node_tree.nodes.get('Background')
-    if bg and not scene.get('forma_lighting'):bg.inputs['Color'].default_value=(.75,.78,.82,1);bg.inputs['Strength'].default_value=.5
-    configure_world(scene)
-    if not any(o.type=='LIGHT' for o in scene.objects):
-        d=bpy.data.lights.new('预览补光','SUN');d.energy=2;o=bpy.data.objects.new('预览补光',d);scene.collection.objects.link(o);o.rotation_euler=(.45,-.5,-.5)
+    ensure_render_lighting(scene)
     data=bpy.data.cameras.new('FormaVideoCamera');cam=bpy.data.objects.new('FormaVideoCamera',data);scene.collection.objects.link(cam);scene.camera=cam;data.sensor_fit='VERTICAL';data.sensor_height=24
     def cv(v):return Vector((v[0],-v[2],v[1]))
     def pose(c):

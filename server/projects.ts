@@ -13,29 +13,26 @@ import {
   project,
   put,
 } from "./store";
-import type { Job, Project, Revision, Render } from "../src/types";
+import type { Job, Project, Revision } from "../src/types";
 
 export function projectLibrary(trash = false) {
   return list<Project>("project")
     .filter((p) => !!p.deletedAt === trash)
     .map((p) => {
       const revisions = list<Revision>("revision", p.id);
-      const render = list<Render>("render", p.id).reverse().find((r) => r.revisionId === p.currentRevisionId);
       return {
         ...p,
         updatedAt: p.updatedAt || revisions.at(-1)?.createdAt || p.createdAt,
         activeJob: activeJob(p.id),
-        coverUrl:
-          render?.revisionId === p.currentRevisionId
-            ? `/api/artifacts/${render.artifactId}`
-            : savedCover(p.id, p.currentRevisionId),
+        coverUrl: savedCover(p.id, p.currentRevisionId),
       };
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 export function trashProject(id: string, restore = false) {
   const p = project(id, true);
-  if (blenderBridge.matches(id)) throw new Error("请先同步或另存 Blender 修改并断开连接，再移除作品");
+  if (blenderBridge.matches(id))
+    throw new Error("请先同步或另存 Blender 修改并断开连接，再移除作品");
   if (activeJob(id) || videoUploads.has(id))
     throw Object.assign(new Error("作品正在执行任务，请先等待完成或停止任务"), {
       statusCode: 409,
@@ -53,7 +50,8 @@ export function trashProject(id: string, restore = false) {
 }
 export function purgeProject(id: string) {
   const p = project(id, true);
-  if (blenderBridge.matches(id)) throw new Error("请先同步或另存 Blender 修改并断开连接，再移除作品");
+  if (blenderBridge.matches(id))
+    throw new Error("请先同步或另存 Blender 修改并断开连接，再移除作品");
   if (!p.deletedAt || activeJob(id) || videoUploads.has(id))
     throw Object.assign(new Error("请先将空闲作品移入回收站"), {
       statusCode: 409,

@@ -4,7 +4,13 @@ import sharp from "sharp";
 import { DATA } from "./config";
 import { db, get, project, put, revision, uid } from "./store";
 
-type Cover = { id: string; projectId: string; artifactId: string };
+const COVER_STYLE_VERSION = 2;
+type Cover = {
+  id: string;
+  projectId: string;
+  artifactId: string;
+  styleVersion?: number;
+};
 type ImageArtifact = {
   id: string;
   projectId: string;
@@ -18,6 +24,7 @@ export function savedCover(projectId: string, revisionId: string | null) {
   const cover = get<Cover>("cover", revisionId);
   const image = cover && get<ImageArtifact>("artifact", cover.artifactId);
   return cover?.projectId === projectId &&
+    cover.styleVersion === COVER_STYLE_VERSION &&
     image?.projectId === projectId &&
     fs.existsSync(image.path)
     ? `/api/artifacts/${image.id}`
@@ -69,7 +76,12 @@ export async function saveCover(
         mime: "image/jpeg",
         name: "作品封面.jpg",
       });
-      put("cover", { id: revisionId, projectId, artifactId: id });
+      put("cover", {
+        id: revisionId,
+        projectId,
+        artifactId: id,
+        styleVersion: COVER_STYLE_VERSION,
+      });
     })();
   } catch (error) {
     fs.rmSync(file, { force: true });

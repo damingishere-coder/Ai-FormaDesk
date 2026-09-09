@@ -17,6 +17,8 @@
 | Blender 环境 | 建模与渲染沙箱检查通过 |
 | 模型导出 | GLB 与 Blender 源文件下载完成，文件头验证通过 |
 | 图片导出 | 真实 Blender 512×512 PNG 渲染与下载通过 |
+| 灯光保留 | Blender 实例验证旧场景 World、已连接环境节点、灯光与色彩管理不被导出准备覆盖；真实既有作品副本前后渲染对照通过 |
+| 网格与封面 | 建模视口和只读封面显示网格；旧封面重新生成，原封面文件与模型保留；导出画面不叠加辅助网格 |
 | 实时视频 | 640×360 短录制、回放尺寸、保存到作品与下载通过 |
 | 退出与重启 | 后台进程与数据锁释放，重启后作品恢复 |
 
@@ -29,9 +31,17 @@ FORMA_DESKTOP_EXECUTABLE="$PWD/release/mac-arm64/Ai-FormaDesk.app/Contents/MacOS
 FORMA_DESKTOP_MINIMAL_PATH=1 FORMA_DESKTOP_FULL=1 npm run test:desktop
 ```
 
+灯光保留回归（使用临时 Blender 场景，不保存用户文件）：
+
+```sh
+"/Applications/Blender 4.5 LTS.app/Contents/MacOS/Blender" \
+  --background --factory-startup --disable-autoexec --python scripts/verify-render-lighting.py
+```
+
 ## 边界
 
 - 本轮验证的是桌面封装与当前工作台回归，没有重新做所有图片类别的 AI 建模效果验收；三视图不是照片精确重建保证。
+- 交互预览与 Blender 渲染使用不同渲染器，旧作品预览可能有额外补光；正式导出以保存的 Blender 场景灯光和材质为准。
 - 实时视频验证为短录制，未把目标 60 fps 当作持续实测值。精细视频功能沿用当前工作台，未在本次桌面回归中重新做长视频验收。
 - 本地 ad-hoc 签名用于应用完整性；不等于 Apple Developer ID 签名、公证或 App Store 分发。
 - macOS 13 的最低要求来自 [Electron 44 发布说明](https://www.electronjs.org/blog/electron-44-0)，本轮实机系统为 macOS 26.6.2。

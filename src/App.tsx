@@ -527,6 +527,7 @@ export function App() {
             controlsEnabled={!imageExport || !busy}
             imageAspect={imageExport ? compositionAspect : undefined}
             transparentPreview={transparentExport}
+            showGrid={!recording && !imageExport}
             onCameraChange={onCameraChange}
             frameAspect={imageExport ? undefined : recording?recording.width/recording.height:renderView ? frameAspect : undefined}
             onSelect={id=>{if(!recording&&!imageExport)selectObject(id)}}

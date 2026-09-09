@@ -3,7 +3,6 @@ import {
   OrbitControls,
   TransformControls,
   Grid,
-  ContactShadows,
   GizmoHelper,
   GizmoViewport,
 } from "@react-three/drei";
@@ -45,6 +44,7 @@ export type ViewportProps = {
   frameAspect?: number;
   imageAspect?: number;
   transparentPreview?: boolean;
+  showGrid?: boolean;
   controlsEnabled?: boolean;
 };
 const C = new THREE.Matrix4().makeRotationX(-Math.PI / 2),
@@ -360,16 +360,16 @@ function Content({
         <directionalLight position={[4, 7, 5]} intensity={2.5} />
         <directionalLight position={[-4, 3, -3]} intensity={1} />
       </>}
-      {!props.readOnly && (
+      {props.showGrid !== false && !props.transparentPreview && (
         <Grid
           infiniteGrid
           position={[0, -0.006, 0]}
           cellSize={0.25}
           sectionSize={1}
-          cellColor="#dfdfdc"
-          sectionColor="#cfcfca"
-          cellThickness={0.5}
-          sectionThickness={0.8}
+          cellColor="#d9dfdc"
+          sectionColor="#aebbb5"
+          cellThickness={0.6}
+          sectionThickness={1}
           fadeDistance={20}
           fadeStrength={1.5}
         />
@@ -395,18 +395,6 @@ function Content({
             while (n && !n.userData.forma_id) n = n.parent;
             props.onSelect(n?.userData.forma_id || null);
           }}
-        />
-      )}
-      {group && (
-        <ContactShadows
-          key={props.url || "empty"}
-          position={[0, -0.003, 0]}
-          opacity={0.3}
-          scale={20}
-          blur={2.5}
-          far={8}
-          resolution={512}
-          frames={1}
         />
       )}
       <OrbitControls

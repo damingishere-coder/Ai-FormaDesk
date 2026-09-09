@@ -89,6 +89,21 @@ def configure_world(scene):
     n.inputs['Color'].default_value=(*rgb(settings['worldColor']),1);n.inputs['Strength'].default_value=settings['worldStrength']
     scene.view_settings.view_transform=settings.get('viewTransform','Standard');scene.view_settings.look='None';scene.view_settings.exposure=settings['exposure'];scene.view_settings.gamma=1
 
+def ensure_render_lighting(scene):
+    """Keep the saved scene's world graph, light rig and color management.
+
+    Legacy scenes have no forma_lighting metadata; that does not mean their
+    deliberately authored lighting is missing. Only supply genuinely absent
+    resources in this disposable render process, never rewrite the source file.
+    """
+    if scene.world is None:
+        scene.world=bpy.data.worlds.new('预览环境')
+        scene.world.use_nodes=True
+    if not any(o.type=='LIGHT' for o in scene.objects):
+        data=bpy.data.lights.new('预览补光','SUN');data.energy=2
+        light=bpy.data.objects.new('预览补光',data);scene.collection.objects.link(light)
+        light.rotation_euler=(.45,-.5,-.5)
+
 def base_material(item):
     mat=bpy.data.materials.new('外观·'+item['id'][:8]);mat.use_nodes=True;n=node(mat)
     n.inputs['Base Color'].default_value=(*rgb(item['color']),1);n.inputs['Roughness'].default_value=item['roughness'];n.inputs['Metallic'].default_value=item['metalness']
