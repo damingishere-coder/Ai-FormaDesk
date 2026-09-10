@@ -243,25 +243,24 @@ small {
 .mode-switch button {
   width: 116px;
   height: 35px;
+  border-radius: 9px;
   color: #999c96;
   font-size: 13px;
   position: relative;
+  -webkit-user-select: none;
+  user-select: none;
 }
-.mode-switch .active {
-  border-radius: 9px;
+.mode-switch button:focus-visible {
+  outline: 2px solid #6babff;
+  outline-offset: -2px;
+}
+.mode-switch button.active {
   color: var(--blue);
-  background: white;
-  box-shadow: 0 2px 9px #00000008;
+  background: #eaf2ff;
   font-weight: 600;
 }
-.mode-switch .active:after {
-  content: "";
-  position: absolute;
-  bottom: -4px;
-  background: var(--blue);
-  height: 2px;
-  width: 25px;
-  border-radius: 2px;
+.mode-switch button.active:not(:disabled):hover {
+  background: #e0ecff;
 }
 .mode-switch i {
   width: 5px;
