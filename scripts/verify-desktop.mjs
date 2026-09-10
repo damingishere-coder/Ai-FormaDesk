@@ -66,6 +66,13 @@ async function launch() {
     fixture.pid,
   );
   await page.reload();
+  await expect(page.getByRole("heading", { name: "全部作品", exact: true })).toBeVisible();
+  if (!(await page.locator(".home-project img").count())) {
+    await page.getByRole("button", { name: "刷新封面", exact: true }).click();
+    await expect(page.locator(".home-project img")).toHaveCount(1, { timeout: 45000 });
+  }
+  await page.screenshot({ path: path.join(evidence, "home.png") });
+  await page.getByRole("button", { name: "打开 午后工作角", exact: true }).click();
   await expect(page.locator("canvas").first()).toBeVisible({ timeout: 30000 });
   await expect(
     page.getByRole("button", { name: "午后工作角", exact: true }),
@@ -95,6 +102,13 @@ try {
   checks.push("界面 Node 禁用、上下文隔离、沙箱启用");
   assert.equal((await fetch(baseURL + "/api/session")).status, 403);
   checks.push("外部浏览器无法建立桌面会话");
+  const connection = JSON.parse(fs.readFileSync(path.join(data, "project-library/connection.json"), "utf8"));
+  if (packagedExecutable) assert.equal(fs.realpathSync(connection.launcher), fs.realpathSync(packagedExecutable.slice(0, packagedExecutable.indexOf(".app/") + 4)));
+  const libraryHeaders = { "x-forma-library": connection.token };
+  assert.equal((await fetch(baseURL + "/api/session", { headers: libraryHeaders })).status, 200);
+  assert.equal((await fetch(baseURL + "/api/projects", { headers: libraryHeaders })).status, 403);
+  assert.equal((await fetch(baseURL + "/api/library", { headers: { ...libraryHeaders, Origin: baseURL } })).status, 403);
+  checks.push("Blender 本机列表凭据仅允许限定只读入口，拒绝网页与编辑接口");
   const health = await page.evaluate(async () => {
     for (let i = 0; i < 120; i++) {
       const h = await (await fetch("/api/health")).json();
@@ -201,7 +215,7 @@ try {
     await expect(
       result.getByRole("button", { name: "已保存到作品" }),
     ).toBeVisible({ timeout: 30000 });
-    await page.getByRole("button", { name: "退出录制模式" }).click();
+    await result.getByRole("button", { name: "返回导出设置", exact: true }).click();
     const videoPath = path.join(home, "recording.webm");
     await instance.evaluate(({ session }, file) => {
       session

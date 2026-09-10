@@ -16,6 +16,7 @@ export function ProjectCover({
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const viewport = useRef<ViewportHandle>(null);
+  const requestStamp = useRef(Date.now());
   const callbacks = useRef({ onSaved, onError });
   callbacks.current = { onSaved, onError };
   const alive = useRef(false),
@@ -28,6 +29,8 @@ export function ProjectCover({
   }
   useEffect(() => {
     alive.current = true;
+    saving.current = false;
+    finished.current = false;
     const timer = window.setTimeout(() => fail("封面生成超时"), 45_000);
     let cancelled = false;
     void api<Snapshot>(`/projects/${project.id}/scene`)
@@ -57,6 +60,7 @@ export function ProjectCover({
         {
           revisionId: project.currentRevisionId,
           image,
+          replace: true,
         },
       );
       if (alive.current && !finished.current) {
@@ -82,13 +86,19 @@ export function ProjectCover({
       >
         <Viewport
           ref={viewport}
-          url={snapshot.previewUrl}
+          url={
+            snapshot.previewUrl +
+            (snapshot.previewUrl?.includes("?") ? "&" : "?") +
+            "cover=" +
+            requestStamp.current
+          }
           scene={snapshot.scene}
           selected={null}
           onSelect={() => {}}
           mode="select"
           busy={false}
           readOnly
+          thumbnail
           hideGizmo
           controlsEnabled={false}
           onTransform={() => {}}

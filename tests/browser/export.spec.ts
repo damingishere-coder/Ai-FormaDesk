@@ -100,8 +100,9 @@ test("统一导出保留各类型设置，模型下载与真实视频录制均�
     const url = new URL(route.request().url()).pathname;
     let json: unknown;
     if (url === "/api/session") json = { token: "test-session" };
-    else if (url === "/api/blender/status") json = { installed: false, connected: false, state: "closed" };
     else if (url === "/api/health") json = { ok: true, codex: { ok: true } };
+    else if (url === "/api/blender/status") json = { sessions: [] };
+    else if (url.endsWith("/opened")) json = snapshot.project;
     else if (url === "/api/projects") json = [snapshot.project];
     else if (url.endsWith("/scene")) json = snapshot;
     else if (url === "/api/artifacts/preview") json = gltf;
@@ -155,6 +156,9 @@ test("统一导出保留各类型设置，模型下载与真实视频录制均�
     await route.fulfill({ json });
   });
   await page.goto("/");
+  await page
+    .getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true })
+    .click();
   await expect(
     page.getByRole("button", { name: "渲染出图", exact: true }),
   ).toHaveCount(0);
@@ -201,10 +205,17 @@ test("统一导出保留各类型设置，模型下载与真实视频录制均�
     .toBeLessThan(0.002);
   await page.screenshot({ path: testInfo.outputPath("export-video.png") });
   await page.getByRole("button", { name: "进入录制模式" }).click();
-  await expect(page.getByRole("region", { name: "视频录制" })).toContainText("60 fps");
+  await expect(page.getByRole("region", { name: "视频录制" })).toContainText(
+    "60 fps",
+  );
   await expect(tab("图片")).toBeDisabled();
   await expect(page.getByRole("button", { name: "返回工作台" })).toBeDisabled();
   await page.getByRole("button", { name: "开始录制", exact: true }).click();
+  await expect(page.getByRole("button", { name: "返回工作台" })).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "返回工作台" }),
+  ).toHaveAttribute("title", "请先保存或结束录制，再返回工作台切换作品。");
+  await expect(page.getByRole("region", { name: "作品首页" })).toHaveCount(0);
   await page.waitForTimeout(600);
   await page.getByRole("button", { name: "停止录制", exact: true }).click();
   const result = page.getByRole("dialog", { name: "录制结果" });

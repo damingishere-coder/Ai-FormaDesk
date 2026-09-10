@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import Database from "better-sqlite3";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -10,6 +11,7 @@ import type {
   Message,
   Proposal,
 } from "../src/types";
+export const storeChanges = new EventEmitter();
 export const db = new Database(path.join(DATA, "index.sqlite"));
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
@@ -23,6 +25,7 @@ export function put<T extends { id: string; projectId?: string }>(
   db.prepare(
     "INSERT INTO documents VALUES (?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body, projectId=excluded.projectId",
   ).run(kind, v.id, v.projectId || null, JSON.stringify(v));
+  storeChanges.emit("change", kind);
   return v;
 }
 export function get<T>(kind: string, id: string): T | undefined {

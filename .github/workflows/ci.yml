@@ -1,7 +1,7 @@
 name: Build and tests
 on:
   push:
-    branches: [main, 'codex/desktop-v1-release']
+    branches: [main]
   pull_request:
     branches: [main]
 permissions:
@@ -19,5 +19,6 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm test
+      - run: python3 tests/plugin-source-open.py
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high

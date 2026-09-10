@@ -1,6 +1,6 @@
 {
   "name": "ai-formadesk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "main": "main.cjs",
   "description": "用自然语言创作、编辑和导出真实 Blender 场景的 macOS 桌面工作台",

@@ -55,14 +55,15 @@ const shortDate = (s: string) =>
     minute: "2-digit",
   });
 export function App() {
-  const [pid, setPid] = useState(localStorage.getItem("forma-project") || ""),
+  const [resumeId, setResumeId] = useState(localStorage.getItem("forma-project") || "");
+  const [pid, setPid] = useState(""),
     [snapshot, setSnapshot] = useState<Snapshot | null>(null),
     [health, setHealth] = useState<any>(null),
     [selected, setSelected] = useState<string | null>(null),
     [mode, setMode] = useState<"select" | "translate" | "rotate" | "scale">(
       "select",
     ),
-    [panel, setPanel] = useState(""),
+    [panel, setPanel] = useState("projects"),
     [prompt, setPrompt] = useState(""),
     [job, setJobState] = useState<Job | null>(null),
     [submitting, setSubmitting] = useState(false),
@@ -185,7 +186,6 @@ export function App() {
     if (!pid) {
       setSnapshot(null);
       setJob(null);
-      localStorage.removeItem("forma-project");
       return;
     }
     currentPid.current = pid;
@@ -273,7 +273,7 @@ export function App() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (recording||document.querySelector(".project-library")) return;
+      if (recording||document.querySelector(".project-home")) return;
       if (imageExport) {
         if (e.key === "Escape") setImageExport(false);
         return;
@@ -387,13 +387,14 @@ export function App() {
     }
   }
   async function openPanel(name: string) {
+    if (name === "projects" && recording) { setError("正在录制，请先保存或结束录制后再切换作品。"); return; }
     if (name === "inspector") {
       setInspectorOpen(open => !open);
       setChatExpanded(false);
       setRenderView(false);
       return;
     }
-    if (panel !== name) setChatExpanded(false);
+    if (panel !== name && name !== "projects") setChatExpanded(false);
     if (name === "scene" || name === "inspector") setRenderView(false);
     setPanel(panel === name ? "" : name);
     if (name === "history")
@@ -445,8 +446,9 @@ export function App() {
         )));
   return (
     <div className={"workbench "+(recording?"is-recording ":"")+(renderView?"is-preview ":"")+(imageExport?"is-image-export":"")} style={{ "--output-aspect": compositionAspect } as CSSProperties}>
+      <div className="editor-shell" inert={panel === "projects"}>
       <header className="topbar">
-        <a className="brand" href="/" aria-label="Ai-FormaDesk 首页">
+        <a className="brand" href="/" aria-label="Ai-FormaDesk 首页" onClick={e=>{e.preventDefault();void openPanel("projects");}}>
           <span className="brand-mark">
             <img src="/app-icon.png" alt="" width={36} height={36} />
           </span>
@@ -813,10 +815,15 @@ export function App() {
           </footer>
         </aside>
       )}
+      </div>
       {panel === "projects" && (
         <ProjectLibrary
           currentId={pid}
+          resumeId={resumeId}
           onOpen={(id) => {
+            if(recording){setError("正在录制，请先保存或结束录制后再切换作品。");return;}
+            setResumeId(id);
+            void api(`/projects/${id}/opened`,{}).catch(e=>setError(e.message));
             setPid(id);
             setPanel("");
             setPrompt("");
@@ -824,6 +831,7 @@ export function App() {
           onClose={() => setPanel("")}
           onRemoved={(id) => {
             if (id === pid) setPid("");
+            if (id === resumeId) {setResumeId("");localStorage.removeItem("forma-project");}
           }}
           onError={setError}
         />

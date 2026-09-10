@@ -129,6 +129,8 @@ export type Project = {
   id: string;
   name: string;
   currentRevisionId: string | null;
+  favorite?: boolean;
+  lastOpenedAt?: string | null;
   threadId: string | null;
   createdAt: string;
   redo: string[];
@@ -137,6 +139,7 @@ export type Project = {
   deletedAt?: string | null;
   cleanupState?: "pending" | "failed" | null;
   coverUrl?: string | null;
+  coverRefreshSupported?: boolean;
   activeJob?: Job | null;
 };
 export type Revision = {

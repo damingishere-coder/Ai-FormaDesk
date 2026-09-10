@@ -26,7 +26,7 @@ async function setup(page: Page) {
     return route.fulfill({ json: url === "/api/session" ? { token: "fixture" } : url === "/api/health" ? { ok: true, codex: { ok: true } } : url === "/api/projects" ? [project] : url.endsWith("/scene") ? snapshot : recent });
   });
   await page.goto(process.env.REFERENCE_UI_BASE || "/");
-  if (process.env.REFERENCE_HOME) await page.getByRole("button", { name: "打开 三视图测试作品", exact: true }).click();
+  await page.getByRole("button", { name: "打开 三视图测试作品", exact: true }).click();
   await page.getByRole("button", { name: "参考与三视图", exact: true }).click();
   return page.getByRole("dialog", { name: "参考与三视图", exact: true });
 }

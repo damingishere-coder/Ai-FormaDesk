@@ -4,13 +4,8 @@ import sharp from "sharp";
 import { DATA } from "./config";
 import { db, get, project, put, revision, uid } from "./store";
 
-const COVER_STYLE_VERSION = 2;
-type Cover = {
-  id: string;
-  projectId: string;
-  artifactId: string;
-  styleVersion?: number;
-};
+const COVER_STYLE_VERSION = 3;
+type Cover = { id: string; projectId: string; artifactId: string; styleVersion?: number };
 type ImageArtifact = {
   id: string;
   projectId: string;
@@ -35,9 +30,14 @@ export async function saveCover(
   projectId: string,
   revisionId: string,
   image: string,
+  replace = false,
 ) {
   function assertOwner() {
     project(projectId);
+    if (replace && project(projectId).currentRevisionId !== revisionId)
+      throw Object.assign(new Error("作品版本已变化，请重新刷新封面"), {
+        statusCode: 409,
+      });
     if (revision(revisionId).projectId !== projectId)
       throw Object.assign(new Error("封面版本不属于此作品"), {
         statusCode: 404,
@@ -45,7 +45,7 @@ export async function saveCover(
   }
   assertOwner();
   const existing = savedCover(projectId, revisionId);
-  if (existing) return { coverUrl: existing };
+  if (existing && !replace) return { coverUrl: existing };
   const match = /^data:image\/(?:png|jpeg);base64,([A-Za-z0-9+/=]+)$/.exec(
     image,
   );
@@ -61,7 +61,8 @@ export async function saveCover(
   // Decoding yields: recheck ownership/deletion and concurrent uploads before writing.
   assertOwner();
   const concurrent = savedCover(projectId, revisionId);
-  if (concurrent) return { coverUrl: concurrent };
+  if (concurrent && (!replace || concurrent !== existing))
+    return { coverUrl: concurrent };
   const id = uid(),
     dir = path.join(DATA, "covers", projectId);
   fs.mkdirSync(dir, { recursive: true });
@@ -76,12 +77,7 @@ export async function saveCover(
         mime: "image/jpeg",
         name: "作品封面.jpg",
       });
-      put("cover", {
-        id: revisionId,
-        projectId,
-        artifactId: id,
-        styleVersion: COVER_STYLE_VERSION,
-      });
+      put("cover", { id: revisionId, projectId, artifactId: id, styleVersion: COVER_STYLE_VERSION });
     })();
   } catch (error) {
     fs.rmSync(file, { force: true });

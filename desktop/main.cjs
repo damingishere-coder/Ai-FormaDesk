@@ -304,6 +304,7 @@ async function startBackend() {
     ZAOWU_PORT: "0",
     ZAOWU_WEB_DIR: path.join(runtime, "dist"),
     ZAOWU_DESKTOP_TOKEN: token,
+    ...(app.isPackaged ? { ZAOWU_DESKTOP_APP: path.resolve(process.resourcesPath, "../..") } : {}),
     ZAOWU_MCP_RUNTIME:
       v.mcpRuntime || path.join(dataDir, "blender-mcp-runtime"),
   };

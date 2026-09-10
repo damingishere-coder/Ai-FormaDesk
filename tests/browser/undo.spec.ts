@@ -30,6 +30,7 @@ test("撤销直接回到上一步，支持连续撤销和重做；历史列表�
     else if (url === "/api/blender/status") json = { installed: false, connected: false, state: "closed" };
     else if (url === "/api/health") json = { ok: true, codex: { ok: true } };
     else if (url === "/api/projects") json = [snapshot.project];
+    else if (url.endsWith("/opened")) json = snapshot.project;
     else if (url.endsWith("/scene")) json = snapshot;
     else if (url.endsWith("/revisions")) { historyReads++; json = revisions; }
     else if (url.endsWith("/restore")) {
@@ -56,6 +57,7 @@ test("撤销直接回到上一步，支持连续撤销和重做；历史列表�
     await route.fulfill({ json });
   });
   await page.goto("/");
+  await page.getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true }).click();
   const undo = page.getByRole("button", { name: "撤销", exact: true });
   const redo = page.getByRole("button", { name: "重做", exact: true });
   const dialog = page.getByRole("dialog", { name: "版本历史", exact: true });

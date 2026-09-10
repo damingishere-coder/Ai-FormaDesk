@@ -1,3 +1,5 @@
+import { projectFiles, revealProjectFile, openProjectFile, openProjectSource } from "./project-files";
+import { startLibraryCache, writeLibraryCache, libraryToken } from "./library-cache";
 import { blenderBridge } from "./blender-mcp";
 import { createVideo, uploadVideo, ownedVideo, videoUploads } from "./videos";
 import Fastify from "fastify";
@@ -64,11 +66,16 @@ const allowedHosts = new Set([
     : []),
 ]);
 app.addHook("onRequest", async (req, reply) => {
-  if (desktopToken && req.headers["x-forma-desktop"] !== desktopToken)
+  // Blender is a local native client. It receives only the library routes;
+  // normal desktop pages and all editing APIs retain the desktop token gate.
+  const libraryNativeRequest = req.headers["x-forma-library"] === libraryToken &&
+    !req.headers.origin && !req.headers["sec-fetch-site"] && req.method === "GET" &&
+    ["/api/session", "/api/library"].includes(req.url);
+  if (desktopToken && req.headers["x-forma-desktop"] !== desktopToken && !libraryNativeRequest)
     return reply.code(403).send({ error: "请在 Ai-FormaDesk 桌面应用中打开工作台" });
+  if (desktopToken) reply.header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
   if (!allowedHosts.has(req.headers.host || ""))
     return reply.code(403).send({ error: "不允许的 Host" });
-  if (desktopToken) reply.header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
   const origin = req.headers.origin;
   if (origin && !Array.from(allowedHosts).some((h) => origin === `http://${h}`))
     return reply.code(403).send({ error: "不允许的网页来源" });
@@ -113,12 +120,15 @@ app.get("/api/session", async (_, reply) => {
   return { token: session };
 });
 app.get("/api/health", async () => environment);
+app.post<{ Params: { id: string } }>("/api/projects/:id/blender/source", async req => openProjectSource(req.params.id));
 app.get("/api/blender/status", async () => blenderBridge.refreshStatus());
 app.post<{ Params: { id: string } }>("/api/projects/:id/blender/open", async req => {
   const p = project(req.params.id);
   if (activeJob(p.id)) throw new Error("请等待当前任务完成后打开 Blender");
   if (!p.currentRevisionId) throw new Error("请先创建并保存作品");
-  return blenderBridge.open(p.id, p.currentRevisionId, artifactPath(revision(p.currentRevisionId).artifacts.blend));
+  const opened = await blenderBridge.open(p.id, p.currentRevisionId, artifactPath(revision(p.currentRevisionId).artifacts.blend));
+  put("project", { ...project(p.id), lastOpenedAt: new Date().toISOString() });
+  return opened;
 });
 app.post<{ Params: { id: string } }>("/api/projects/:id/blender/recover", async req => {
   project(req.params.id); if(activeJob(req.params.id)) throw new Error("请等待任务完成");
@@ -151,8 +161,8 @@ app.post<{ Params: { id: string } }>(
   "/api/projects/:id/cover",
   { bodyLimit: 4 * 1024 * 1024 },
   async (req) => {
-    const body = z.object({ revisionId: z.string().uuid(), image: z.string().max(4 * 1024 * 1024) }).parse(req.body);
-    return saveCover(z.string().uuid().parse(req.params.id), body.revisionId, body.image);
+    const body = z.object({ revisionId: z.string().uuid(), image: z.string().max(4 * 1024 * 1024), replace: z.boolean().optional() }).parse(req.body);
+    return saveCover(z.string().uuid().parse(req.params.id), body.revisionId, body.image, body.replace);
   },
 );
 app.addContentTypeParser(
@@ -221,6 +231,15 @@ app.post<{ Params: { id: string } }>(
       .send(enqueue(req.params.id, b.baseRevisionId, "discuss", b));
   },
 );
+app.get("/api/library", async () => writeLibraryCache());
+app.post<{ Params: { id:string } }>("/api/projects/:id/opened", async req => {
+  const p = project(req.params.id);
+  return put("project", {...p, lastOpenedAt:now()});
+});
+app.get<{ Params: { id:string } }>("/api/projects/:id/files", async req => projectFiles(req.params.id));
+app.post<{ Params: { id:string; fileId:string } }>("/api/projects/:id/files/:fileId/reveal", async req => revealProjectFile(req.params.id,req.params.fileId));
+app.post<{ Params: { id:string; fileId:string } }>("/api/projects/:id/files/:fileId/open", async req => openProjectFile(req.params.id,req.params.fileId));
+
 app.post("/api/projects", async (req) => {
   const { name } = z
     .object({ name: z.string().trim().min(1).max(80) })
@@ -238,10 +257,8 @@ app.post("/api/projects", async (req) => {
 });
 app.patch<{ Params: { id: string } }>("/api/projects/:id", async (req) => {
   const p = project(req.params.id);
-  const { name } = z
-    .object({ name: z.string().trim().min(1).max(80) })
-    .parse(req.body);
-  put("project", { ...p, name, updatedAt: now() });
+  const patch = z.object({name:z.string().trim().min(1).max(80).optional(),favorite:z.boolean().optional()}).strict().parse(req.body);
+  put("project", { ...p, ...patch, ...(patch.name !== undefined ? {updatedAt:now()} : {}) });
   return project(p.id);
 });
 app.post<{ Params: { id: string } }>(
@@ -439,7 +456,7 @@ app.get<{ Params: { id: string }; Querystring: { download?: string } }>(
       .type(a.mime)
       .header("Cache-Control", "private, max-age=31536000, immutable");
     if (req.query.download)
-      reply.header("Content-Disposition", `attachment; filename="${a.name}"`);
+      reply.header("Content-Disposition", `attachment; filename="download.${path.extname(a.name).slice(1)}"; filename*=UTF-8''${encodeURIComponent(a.name)}`);
     const size=fs.statSync(p).size;
     reply.header('Accept-Ranges','bytes');
     const range=req.headers.range;
@@ -473,6 +490,7 @@ const address = app.server.address();
 const actualPort = typeof address === "object" && address ? address.port : PORT;
 allowedHosts.add(`127.0.0.1:${actualPort}`);
 allowedHosts.add(`localhost:${actualPort}`);
+const stopLibraryCache = startLibraryCache(actualPort);
 console.log(`Ai-FormaDesk: http://127.0.0.1:${actualPort}`);
 process.send?.({ type: "forma-ready", port: actualPort });
 void checkEnvironment();
@@ -480,10 +498,8 @@ let stopping = false;
 async function stop() {
   if (stopping) return;
   stopping = true;
-  const shutdownDeadline = setTimeout(() => {
-    reapInterruptedProcesses(path.join(DATA, "runtime-processes"));
-    process.exit(0);
-  }, 8000);
+  stopLibraryCache();
+  const shutdownDeadline = setTimeout(() => { reapInterruptedProcesses(path.join(DATA, "runtime-processes")); process.exit(0); }, 8000);
   shutdownDeadline.unref();
   cancelAll();
   codex.close();

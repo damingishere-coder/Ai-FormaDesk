@@ -41,7 +41,7 @@ mac:
     NSHighResolutionCapable: true
     NSHumanReadableCopyright: Ai-FormaDesk contributors
 dmg:
-  title: Ai-FormaDesk 1.0
+  title: Ai-FormaDesk 1.1
   contents:
     - x: 170
       y: 190

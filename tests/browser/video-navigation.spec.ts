@@ -160,7 +160,7 @@ test("录制结果可逐层返回和直达工作台，失败重试保留视频",
     await route.fulfill({ json });
   });
   await page.goto(process.env.VIDEO_NAV_BASE || "/");
-  if (process.env.VIDEO_NAV_HOME) await page.getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true }).click();
+  await page.getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true }).click();
   await page.getByRole("button", { name: "导出", exact: true }).click();
   await page.getByRole("tab", { name: "视频", exact: true }).click();
   await page.getByLabel("视频宽度").fill("320");
