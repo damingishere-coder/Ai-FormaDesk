@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { Snapshot, VideoRecord } from "../../src/types";
 
-test("统一导出保留各类型设置，模型下载与真实视频录制均在同页完成", async ({
+test("录制结果可逐层返回和直达工作台，失败重试保留视频", async ({
   page,
 }, testInfo) => {
   test.setTimeout(90000);
@@ -93,6 +93,7 @@ test("统一导出保留各类型设置，模型下载与真实视频录制均�
   const renders: any[] = [];
   let video: VideoRecord;
   let videoBytes: Buffer | null = null;
+  let uploadCount = 0, createCount = 0, failNextUpload = false;
   await page.addInitScript(() =>
     localStorage.setItem("forma-project", "export-test"),
   );
@@ -100,8 +101,9 @@ test("统一导出保留各类型设置，模型下载与真实视频录制均�
     const url = new URL(route.request().url()).pathname;
     let json: unknown;
     if (url === "/api/session") json = { token: "test-session" };
-    else if (url === "/api/blender/status") json = { installed: false, connected: false, state: "closed" };
     else if (url === "/api/health") json = { ok: true, codex: { ok: true } };
+    else if (url === "/api/blender/status") json = { sessions: [] };
+    else if (url.endsWith("/opened")) json = snapshot.project;
     else if (url === "/api/projects") json = [snapshot.project];
     else if (url.endsWith("/scene")) json = snapshot;
     else if (url === "/api/artifacts/preview") json = gltf;
@@ -123,6 +125,7 @@ test("统一导出保留各类型设置，模型下载与真实视频录制均�
       });
       return;
     } else if (url.endsWith("/videos")) {
+      createCount++;
       const body = route.request().postDataJSON();
       expect(body.baseRevisionId).toBe("revision");
       expect(body.settings).toMatchObject({ mode: "realtime", fps: 60 });
@@ -143,6 +146,8 @@ test("统一导出保留各类型设置，模型下载与真实视频录制均�
       } as VideoRecord;
       json = video;
     } else if (url.endsWith("/upload")) {
+      uploadCount++;
+      if (failNextUpload) { failNextUpload = false; return route.fulfill({ status: 500, json: { error: "测试上传失败" } }); }
       videoBytes = route.request().postDataBuffer();
       expect(videoBytes!.length).toBeGreaterThan(100);
       video.artifactId = "saved-video";
@@ -154,98 +159,70 @@ test("统一导出保留各类型设置，模型下载与真实视频录制均�
     } else throw new Error(`Unexpected API request: ${url}`);
     await route.fulfill({ json });
   });
-  await page.goto("/");
-  await expect(
-    page.getByRole("button", { name: "渲染出图", exact: true }),
-  ).toHaveCount(0);
+  await page.goto(process.env.VIDEO_NAV_BASE || "/");
+  if (process.env.VIDEO_NAV_HOME) await page.getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true }).click();
   await page.getByRole("button", { name: "导出", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "导出作品" })).toBeVisible();
-  await expect(page.locator(".export-backdrop")).toHaveCount(0);
-  const tab = (name: string) => page.getByRole("tab", { name, exact: true });
-  await expect(tab("图片")).toHaveAttribute("aria-selected", "true");
-  await page.getByLabel("画面比例", { exact: true }).selectOption("portrait");
-  await page.getByRole("checkbox", { name: "透明背景" }).check();
-  await page.getByRole("button", { name: "生成图片", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "生成图片", exact: true }),
-  ).toBeEnabled();
-  expect(renders[0].settings).toMatchObject({
-    width: 720,
-    height: 1280,
-    transparent: true,
-  });
-  await tab("模型").click();
-  for (const [label, ext] of [
-    ["通用三维模型", "glb"],
-    ["Blender 源文件", "blend"],
-  ]) {
-    await page.getByRole("radio", { name: new RegExp(label) }).check();
-    const download = page.waitForEvent("download");
-    await page.getByRole("link", { name: `下载模型 · .${ext}` }).click();
-    expect((await download).suggestedFilename()).toBe(`model.${ext}`);
-  }
-  await page.screenshot({ path: testInfo.outputPath("export-model.png") });
-  await tab("视频").click();
-  await expect(page.getByLabel("视频宽度")).toHaveValue("1280");
-  await expect(page.locator(".viewport-surface")).not.toHaveClass(
-    /transparent/,
-  );
+  await page.getByRole("tab", { name: "视频", exact: true }).click();
   await page.getByLabel("视频宽度").fill("320");
   await page.getByLabel("视频高度").fill("480");
-  await expect(page.getByLabel("视频比例")).toHaveValue("");
-  await expect
-    .poll(async () => {
-      const b = (await page.locator(".viewport-surface").boundingBox())!;
-      return Math.abs(b.width / b.height - 2 / 3);
-    })
-    .toBeLessThan(0.002);
-  await page.screenshot({ path: testInfo.outputPath("export-video.png") });
-  await page.getByRole("button", { name: "进入录制模式" }).click();
-  await expect(page.getByRole("region", { name: "视频录制" })).toContainText("60 fps");
-  await expect(tab("图片")).toBeDisabled();
-  await expect(page.getByRole("button", { name: "返回工作台" })).toBeDisabled();
-  await page.getByRole("button", { name: "开始录制", exact: true }).click();
-  await page.waitForTimeout(600);
-  await page.getByRole("button", { name: "停止录制", exact: true }).click();
-  const result = page.getByRole("dialog", { name: "录制结果" });
-  await expect(result).toBeVisible();
-  await expect
-    .poll(() =>
-      result
-        .locator("video")
-        .evaluate((v: HTMLVideoElement) => [v.videoWidth, v.videoHeight]),
-    )
-    .toEqual([320, 480]);
-  await result.screenshot({ path: testInfo.outputPath("video-result.png") });
-  await result.getByRole("button", { name: "保存到作品", exact: true }).click();
-  await expect(
-    result.getByRole("button", { name: "已保存到作品" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "返回导出设置" }).click();
-  await expect(tab("视频")).toHaveAttribute("aria-selected", "true");
-  await expect(
-    page.getByRole("link", { name: "下载视频", exact: true }),
-  ).toBeVisible();
-  await tab("图片").click();
-  await expect(page.getByLabel("图片宽度")).toHaveValue("720");
-  await expect(page.getByRole("checkbox", { name: "透明背景" })).toBeChecked();
-  await page.getByRole("button", { name: "生成图片", exact: true }).click();
-  await expect.poll(() => renders.length).toBe(2);
-  for (const key of ["position", "target", "up"])
-    renders[0].camera[key].forEach((v: number, i: number) =>
-      expect(renders[1].camera[key][i]).toBeCloseTo(v, 3),
-    );
-  expect(renders[1].camera.aspect).toBeCloseTo(720 / 1280, 3);
-  await tab("模型").click();
-  await expect(
-    page.getByRole("radio", { name: /Blender 源文件/ }),
-  ).toBeChecked();
+  const result = page.getByRole("dialog", { name: "录制结果", exact: true });
+  async function recordShort() {
+    await page.getByRole("button", { name: "进入录制模式", exact: true }).click();
+    await page.getByRole("button", { name: "开始录制", exact: true }).click();
+    await page.waitForTimeout(800);
+    await page.getByRole("button", { name: "停止录制", exact: true }).click();
+    await expect(result).toBeVisible();
+    await expect(result.locator("video")).toBeVisible();
+  }
+  // The ready layer has an explicit back action and creates no empty recording.
+  await page.getByRole("button", { name: "进入录制模式", exact: true }).click();
+  await page.getByRole("button", { name: "返回导出设置", exact: true }).click();
+  expect(createCount).toBe(0);
+  await recordShort();
+  await expect(page.getByRole("region", { name: "视频录制" })).toHaveCount(0);
+  await result.screenshot({ path: testInfo.outputPath("video-navigation-desktop.png") });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(
-    page.getByRole("link", { name: "下载模型 · .blend" }),
-  ).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("export-mobile.png") });
-  await page.getByRole("button", { name: "返回工作台" }).click();
-  await expect(page.locator(".workbench")).not.toHaveClass(/is-image-export/);
+  await expect(result.getByRole("button", { name: "返回导出设置", exact: true })).toBeInViewport();
+  await expect(result.getByRole("button", { name: "返回作品工作台", exact: true })).toBeInViewport();
+  expect(await result.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("video-navigation-mobile.png") });
+  await page.setViewportSize({ width: 1195, height: 837 });
+  await result.getByRole("button", { name: "播放镜头路线", exact: true }).click();
+  await page.getByRole("button", { name: "返回录制结果", exact: true }).click();
+  await expect(result).toBeVisible();
+  // Failure must keep the blob and its download link; retry must reuse the record.
+  const blobUrl = await result.locator("video").getAttribute("src");
+  failNextUpload = true;
+  await result.getByRole("button", { name: "返回导出设置", exact: true }).click();
+  await expect(result.getByRole("alert")).toContainText("测试上传失败");
+  await expect(result.locator("video")).toHaveAttribute("src", blobUrl!);
+  await expect(result.getByRole("link", { name: "下载视频", exact: true })).toBeVisible();
+  expect(createCount).toBe(1);
+  await result.getByRole("button", { name: "返回导出设置", exact: true }).click();
+  await expect(result).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "导出作品" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "返回工作台", exact: true })).toBeEnabled();
+  await expect(page.getByLabel("视频宽度")).toHaveValue("320");
+  expect(createCount).toBe(1);
+  expect(uploadCount).toBe(2);
+  // Saved results return directly to the editor without uploading twice.
+  await recordShort();
+  await result.getByRole("button", { name: "保存到作品", exact: true }).click();
+  await expect(result.getByRole("button", { name: "已保存到作品", exact: true })).toBeVisible();
+  const uploadsBeforeExit = uploadCount;
+  await result.getByRole("button", { name: "返回作品工作台", exact: true }).click();
+  await expect(result).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "导出作品" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "导出", exact: true })).toBeVisible();
+  expect(uploadCount).toBe(uploadsBeforeExit);
+  // Escape goes up one layer, preserving a fresh result before returning.
+  await page.getByRole("button", { name: "导出", exact: true }).click();
+  await page.getByRole("tab", { name: "视频", exact: true }).click();
+  await recordShort();
+  await page.keyboard.press("Escape");
+  await expect(result).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "导出作品" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "导出作品" })).toHaveCount(0);
   expect(errors).toEqual([]);
 });

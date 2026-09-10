@@ -828,7 +828,7 @@ export function App() {
           onError={setError}
         />
       )}
-      {recording&&base&&<VideoRecorder embedded pid={pid} base={base} settings={recording} viewport={viewport} onClose={()=>{setRecording(null);setExportTab('video')}} onSaved={()=>void load(pid)} onRender={id=>startJob(`videos/${id}/render`,{})}/>}
+      {recording&&base&&<VideoRecorder embedded pid={pid} base={base} settings={recording} viewport={viewport} onClose={()=>{setRecording(null);setExportTab('video')}} onReturnToWorkbench={()=>{setRecording(null);setImageExport(false);setExportTab('video')}} onSaved={()=>void load(pid)} onRender={id=>startJob(`videos/${id}/render`,{})}/>}
       {["history", "health"].includes(panel) && (
         <div className="modal-backdrop" onClick={() => setPanel("")}>
           <section
