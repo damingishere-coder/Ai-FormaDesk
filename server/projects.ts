@@ -1,6 +1,7 @@
 import { blenderBridge } from "./blender-mcp";
 import { videoUploads } from "./videos";
 import { savedCover } from "./covers";
+import { projectTokenUsage } from "./token-usage";
 import fs from "node:fs";
 import path from "node:path";
 import { DATA } from "./config";
@@ -22,6 +23,7 @@ export function projectLibrary(trash = false) {
       const revisions = list<Revision>("revision", p.id);
       return {
         ...p,
+        tokenUsage: projectTokenUsage(p),
         updatedAt: p.updatedAt || revisions.at(-1)?.createdAt || p.createdAt,
         activeJob: activeJob(p.id),
         coverUrl: savedCover(p.id, p.currentRevisionId),

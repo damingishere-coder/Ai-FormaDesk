@@ -18,6 +18,7 @@ import {
 import type { Scene } from "../src/types";
 
 type PipelineOptions = {
+  projectId?: string;
   runId: string;
   root: string;
   prompt: string;
@@ -183,6 +184,7 @@ async function runSinglePass(o: PipelineOptions, visualRequest: ReturnType<typeo
     schema.parse(
       await visualRequest({
         cwd: o.root,
+        projectId: o.projectId,
         prompt,
         images,
         signal: o.signal,
@@ -199,6 +201,7 @@ async function runSinglePass(o: PipelineOptions, visualRequest: ReturnType<typeo
     }
     const receipt = await visualRequest<ImageReceipt>({
       cwd: o.root,
+        projectId: o.projectId,
       prompt:
         "必须调用原生图像生成工具输出真实图片，不能用代码、SVG或文字代替。\n" +
         prompt,

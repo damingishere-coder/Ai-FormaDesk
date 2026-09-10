@@ -2038,3 +2038,5 @@ small {
 /* Shared identity for the desktop application and workspace. */
 .brand-mark { background: transparent; box-shadow: none; }
 .brand-mark img { display: block; width: 36px; height: 36px; object-fit: contain; }
+
+.project-token-usage { white-space: nowrap; font-variant-numeric: tabular-nums; }
