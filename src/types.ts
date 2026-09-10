@@ -125,6 +125,7 @@ export type Scene = z.infer<typeof sceneSchema>;
 export type SceneCommand = z.infer<typeof commandSchema>;
 export type CameraSpec = z.infer<typeof cameraSchema>;
 export type Project = {
+  tokenUsage?: { totalTokens: number; partial: boolean } | null;
   id: string;
   name: string;
   currentRevisionId: string | null;

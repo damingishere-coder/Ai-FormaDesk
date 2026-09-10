@@ -15,6 +15,7 @@ import { forgetProjectDraft } from "./Composer";
 import { Viewport } from "./Viewport";
 import { ProjectCover } from "./ProjectCover";
 import type { Project, Snapshot } from "./types";
+import { tokenUsageLabel, tokenUsageTitle } from "./tokenUsage";
 export function ProjectLibrary({
   currentId,
   onOpen,
@@ -355,6 +356,9 @@ export function ProjectLibrary({
                               hour: "2-digit",
                               minute: "2-digit",
                             })}
+                            <span className="project-token-usage" title={tokenUsageTitle(p.tokenUsage)}>
+                              {" · "}{tokenUsageLabel(p.tokenUsage)}
+                            </span>
                             {p.activeJob && " · 正在处理"}
                             {p.cleanupState && " · 清理未完成"}
                           </small>

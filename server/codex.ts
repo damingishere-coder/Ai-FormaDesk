@@ -8,6 +8,7 @@ import { CODEX, DATA, MODEL, EFFORT } from "./config";
 import type { ThreadStartParams } from "./protocol/v2/ThreadStartParams";
 import type { TurnStartParams } from "./protocol/v2/TurnStartParams";
 import { runProcess } from "./process";
+import { bindTokenThread, observeTokenUsage } from "./token-usage";
 const response = z.object({
   python: z.string().min(1).max(150000),
   summary: z.string().min(1).max(5000),
@@ -77,6 +78,7 @@ export class CodexAdapter {
     createInterface({ input: this.child.stdout }).on("line", (line) => {
       try {
         const m = JSON.parse(line);
+        observeTokenUsage(m);
         if (m.id !== undefined && m.method) {
           if (m.method.includes("requestApproval"))
             this.send({ id: m.id, result: { decision: "decline" } });
@@ -259,6 +261,7 @@ export class CodexAdapter {
     }
     if (signal.aborted) throw new Error("任务已取消");
     const tid = threadId!;
+    bindTokenThread(projectId, tid);
     let turnId: string | undefined;
     let final = "";
     return await new Promise<unknown>((resolve, reject) => {

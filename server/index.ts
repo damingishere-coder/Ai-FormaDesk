@@ -51,6 +51,7 @@ import {
 } from "./attachments";
 import { projectLibrary, trashProject, purgeProject } from "./projects";
 import { saveCover } from "./covers";
+import { startTokenTracking } from "./token-usage";
 const app = Fastify({ logger: false, bodyLimit: 256 * 1024, forceCloseConnections: true });
 const desktopToken = process.env.ZAOWU_DESKTOP_TOKEN;
 await app.register(cookie);
@@ -462,6 +463,7 @@ else
       .send("<h1>Ai-FormaDesk</h1><p>请运行 npm run build，再启动服务。</p>"),
   );
 reapInterruptedProcesses(path.join(DATA, "runtime-processes"));
+startTokenTracking();
 recoverInterrupted();
 collectUnusedImages();
 const attachmentSweep = setInterval(collectUnusedImages, 3600000);

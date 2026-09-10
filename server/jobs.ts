@@ -464,7 +464,7 @@ async function perform(
         const objects = await blenderBridge.inspect(p.id);
         const selected = objects.find((o: any) => o.id === payload.objectId);
         if (!selected) throw new Error("Blender 中找不到选中部件");
-        command = await interpretBlenderEdit(dir, payload.prompt, selected, j.baseRevisionId, payload.objectId, signal, message => update(j, { message }));
+        command = await interpretBlenderEdit(dir, payload.prompt, selected, j.baseRevisionId, payload.objectId, signal, message => update(j, { message }), p.id);
       }
       await blenderBridge.capture(p.id, j.baseRevisionId, dir, signal, command);
       sceneStage(j, dir, "校验文件与生成基础预览");
@@ -476,6 +476,7 @@ async function perform(
       if (resume && (resume.projectId !== p.id || resume.baseRevisionId !== j.baseRevisionId)) throw new Error("不能复用其他作品或版本的候选");
       const runId = resume?.visual?.runId || j.id;
       const result = await runVisualPipeline({
+        projectId: p.id,
         runId, root: path.join(DATA, "jobs", runId, "visual"), prompt: payload.prompt,
         images: payload.attachmentIds.map((id: string) => attachmentPath(p.id, id)),
         baseFile: j.baseRevisionId ? artifactPath(revision(j.baseRevisionId).artifacts.blend) : undefined,

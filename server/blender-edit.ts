@@ -19,10 +19,12 @@ export async function interpretBlenderEdit(
   objectId: string,
   signal: AbortSignal,
   onActivity: (message: string) => void,
+  projectId?: string,
 ) {
   const result = editSchema.parse(
     await visualRequest({
       cwd,
+      projectId,
       prompt: `用户明确要求对选中对象做局部调整：${prompt}\n当前实际 Blender 对象：${JSON.stringify(object)}\n只支持位置、旋转、缩放和基础材质。返回绝对变换值，保留未要求变化的轴。单位米，旋转弧度。放大10%意味着当前缩放乘1.1。优先使用controls中的sRGB颜色、粗糙度和金属度作为当前值；没有controls时color为线性RGBA，需要转换成sRGB十六进制。不猜测未提供的材质参数。如果只是询问、描述不明确、需要复杂几何或其他对象，operation=none并在explanation说明。不运行脚本、不做视觉评分。`,
       images: [],
       signal,
