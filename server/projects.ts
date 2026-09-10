@@ -13,28 +13,34 @@ import {
   now,
   project,
   put,
+  storeChanges,
 } from "./store";
-import type { Job, Project, Revision } from "../src/types";
+import type { Job, Project, Revision, Render } from "../src/types";
 
 export function projectLibrary(trash = false) {
   return list<Project>("project")
     .filter((p) => !!p.deletedAt === trash)
     .map((p) => {
       const revisions = list<Revision>("revision", p.id);
+      const render = list<Render>("render", p.id).reverse().find((r) => r.revisionId === p.currentRevisionId);
       return {
         ...p,
         tokenUsage: projectTokenUsage(p),
         updatedAt: p.updatedAt || revisions.at(-1)?.createdAt || p.createdAt,
         activeJob: activeJob(p.id),
-        coverUrl: savedCover(p.id, p.currentRevisionId),
+        coverRefreshSupported: true,
+        coverUrl:
+          savedCover(p.id, p.currentRevisionId) ||
+          (render?.revisionId === p.currentRevisionId
+            ? `/api/artifacts/${render.artifactId}`
+            : null),
       };
     })
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 export function trashProject(id: string, restore = false) {
   const p = project(id, true);
-  if (blenderBridge.matches(id))
-    throw new Error("请先同步或另存 Blender 修改并断开连接，再移除作品");
+  if (blenderBridge.matches(id)) throw new Error("请先同步或另存 Blender 修改并断开连接，再移除作品");
   if (activeJob(id) || videoUploads.has(id))
     throw Object.assign(new Error("作品正在执行任务，请先等待完成或停止任务"), {
       statusCode: 409,
@@ -52,8 +58,7 @@ export function trashProject(id: string, restore = false) {
 }
 export function purgeProject(id: string) {
   const p = project(id, true);
-  if (blenderBridge.matches(id))
-    throw new Error("请先同步或另存 Blender 修改并断开连接，再移除作品");
+  if (blenderBridge.matches(id)) throw new Error("请先同步或另存 Blender 修改并断开连接，再移除作品");
   if (!p.deletedAt || activeJob(id) || videoUploads.has(id))
     throw Object.assign(new Error("请先将空闲作品移入回收站"), {
       statusCode: 409,
@@ -65,6 +70,7 @@ export function purgeProject(id: string) {
       ...list<Job>("job", id).map((j) => ["jobs", j.id]),
       ["attachments", id],
       ["videos", id],
+      ["project-files", id],
       ["covers", id],
       ["codex-workspaces", id],
       ["discussion-workspaces", id],
@@ -85,6 +91,7 @@ export function purgeProject(id: string) {
       db.prepare("DELETE FROM documents WHERE projectId=?").run(id);
       db.prepare("DELETE FROM documents WHERE kind='project' AND id=?").run(id);
     })();
+    storeChanges.emit("change", "project");
     return { deleted: true };
   } catch (e) {
     put("project", { ...p, cleanupState: "failed" });

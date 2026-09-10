@@ -8,7 +8,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const stage = path.join(root, "build/desktop-runtime");
 const cache = path.join(root, "build/downloads");
 if (process.platform !== "darwin" || process.arch !== "arm64")
-  throw new Error("1.0 桌面构建需要 Apple Silicon Mac。");
+  throw new Error("桌面构建需要 Apple Silicon Mac。");
 fs.mkdirSync(cache, { recursive: true });
 const nodeVersion = "22.23.2";
 const archiveName = `node-v${nodeVersion}-darwin-arm64.tar.gz`;

@@ -54,12 +54,14 @@ test("场景列表展开后避开工具栏，长列表滚动且工具仍可操�
     else if (url === "/api/blender/status") json = { installed: false, connected: false, state: "closed" };
     else if (url === "/api/health") json = { ok: true, codex: { ok: true } };
     else if (url === "/api/projects") json = [snapshot.project];
+    else if (url.endsWith("/opened")) json = snapshot.project;
     else if (url.endsWith("/scene")) json = snapshot;
     else throw new Error(`Unexpected API request: ${url}`);
     await route.fulfill({ json });
   });
   await page.setViewportSize({ width: 1536, height: 900 });
   await page.goto("/");
+  await page.getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true }).click();
   const trigger = page.getByRole("button", { name: "场景 · 94", exact: true });
   const panel = page.getByRole("complementary", {
     name: "场景对象",

@@ -28,7 +28,9 @@ export function ExportPanel({
   return (
     <>
       <header className="image-export-header">
-        <button onClick={onClose} disabled={locked} autoFocus>
+        <button onClick={onClose} disabled={locked}
+          title={locked ? "请先保存或结束录制，再返回工作台切换作品。" : undefined}
+          autoFocus>
           <ArrowLeft size={18} />
           返回工作台
         </button>

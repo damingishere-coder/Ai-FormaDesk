@@ -18,6 +18,7 @@ import {
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { CameraSpec, Scene, SceneCommand } from "./types";
+import { frameThumbnail, subjectBounds } from "./thumbnailFraming";
 import { applySceneLight } from "./sceneLighting";
 export type ViewportHandle = {
   camera: () => CameraSpec;
@@ -38,6 +39,7 @@ export type ViewportProps = {
   onTransform: (id: string, t: SceneCommand["transform"]) => void;
   onError: (s: string) => void;
   readOnly?: boolean;
+  thumbnail?: boolean;
   hideGizmo?: boolean;
   onCameraChange?: (camera: CameraSpec) => void;
   onReady?: () => void;
@@ -101,11 +103,19 @@ function Content({
   const [group, setGroup] = useState<THREE.Group | null>(null);
   const [objects, setObjects] = useState(new Map<string, THREE.Object3D>());
   const bounds = useRef(new THREE.Box3());
+  const thumbnailCorners = useRef<THREE.Vector3[]>([]);
   const dragging = useRef(false);
   const clickStart = useRef<[number, number]>([0, 0]);
   const fit = () => {
     const b = bounds.current;
     if (b.isEmpty()) return;
+    if (props.thumbnail) {
+      const target = frameThumbnail(b, camera as THREE.PerspectiveCamera, thumbnailCorners.current);
+      if (target) orbit.current?.target.copy(target);
+      orbit.current?.update();
+      invalidate();
+      return;
+    }
     const center = b.getCenter(new THREE.Vector3()),
       size = b.getSize(new THREE.Vector3());
     const d = Math.max(size.x, size.y, size.z, 1) * 1.3;
@@ -267,6 +277,10 @@ function Content({
               );
           }
         });
+        if (props.thumbnail) {
+          bounds.current.copy(subjectBounds(loaded, thumbnailCorners.current));
+          fitted.current = false;
+        }
         setGroup(loaded);
         setObjects(map);
       },
@@ -403,8 +417,8 @@ function Content({
         makeDefault
         enableDamping
         dampingFactor={0.1}
-        minDistance={0.2}
-        maxDistance={150}
+        minDistance={props.thumbnail ? 0 : 0.2}
+        maxDistance={props.thumbnail ? Infinity : 150}
         onChange={() => {
           if (orbit.current)
             props.onCameraChange?.({
@@ -478,7 +492,7 @@ export const Viewport = forwardRef<ViewportHandle, ViewportProps>(
     <Canvas
       shadows
       camera={{ position: [5, 3.5, 5], fov: 42, near: 0.01, far: 1000 }}
-      dpr={[1, 2]}
+      dpr={props.thumbnail ? 1 : [1, 2]}
       onPointerMissed={(e) => {
         if (e.type === "click") props.onSelect(null);
       }}

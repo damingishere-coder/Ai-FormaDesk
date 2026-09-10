@@ -104,6 +104,7 @@ test("创作浮窗在收起、图文记录、缩窄和手机宽度下保持对�
     else if (url === "/api/health") json = { ok: true, codex: { ok: true } };
     else if (url === "/api/blender/status") json = { sessions: [] };
     else if (url === "/api/projects") json = [snapshot.project];
+    else if (url.endsWith("/opened")) json = snapshot.project;
     else if (url.endsWith("/scene")) json = snapshot;
     else if (url === "/api/jobs/hidden-job/events") {
       await route.fulfill({
@@ -130,6 +131,9 @@ test("创作浮窗在收起、图文记录、缩窄和手机宽度下保持对�
     await route.fulfill({ json });
   });
   await page.goto("/");
+  await page
+    .getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true })
+    .click();
   const input = page.getByRole("textbox", { name: "创作想法", exact: true });
   await expect(input).toBeVisible();
   await expect
@@ -176,6 +180,11 @@ test("创作浮窗在收起、图文记录、缩窄和手机宽度下保持对�
       buffer: png,
     })),
   );
+  await expect(page.locator(".draft-image.ready")).toHaveCount(6);
+  await page.getByRole("link", { name: "Ai-FormaDesk 首页" }).click();
+  await expect(page.getByRole("region", { name: "作品首页" })).toBeVisible();
+  await page.getByRole("button", { name: "返回工作台", exact: true }).click();
+  await expect(input).toHaveValue("保留草稿\n补充眼睛的形状和耳朵的比例。");
   await expect(page.locator(".draft-image.ready")).toHaveCount(6);
   const corner = (await page
     .getByLabel("调整聊天窗口 se", { exact: true })
@@ -270,12 +279,25 @@ test("创作浮窗在收起、图文记录、缩窄和手机宽度下保持对�
     message: "正在建模",
   };
   await page.reload();
+  await page
+    .getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true })
+    .click();
   await expect(launcher).toBeVisible();
   await expect(launcher).toHaveText("任务进行中");
   await expect(page.locator(".composer-wrap")).toBeHidden();
   await launcher.click();
   await expect(
-    page.locator(".composer-bottom").getByRole("button", { name: "停止任务", exact: true }),
+    page
+      .locator(".composer-bottom")
+      .getByRole("button", { name: "停止任务", exact: true }),
+  ).toBeVisible();
+  await page.locator(".project-trigger").click();
+  await expect(page.getByRole("region", { name: "作品首页" })).toBeVisible();
+  await page.getByRole("button", { name: "返回工作台", exact: true }).click();
+  await expect(
+    page
+      .locator(".composer-bottom")
+      .getByRole("button", { name: "停止任务", exact: true }),
   ).toBeVisible();
   expect(errors).toEqual([]);
 });

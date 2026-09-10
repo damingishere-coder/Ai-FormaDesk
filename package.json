@@ -1,6 +1,6 @@
 {
   "name": "ai-formadesk",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -21,7 +21,9 @@
     "desktop:pack": "npm run desktop:prepare && electron-builder --dir",
     "desktop:dist": "npm run desktop:prepare && electron-builder --mac",
     "test:desktop": "node scripts/verify-desktop.mjs",
-    "desktop:icons": "node scripts/build-app-icons.mjs"
+    "desktop:icons": "node scripts/build-app-icons.mjs",
+    "setup:project-library": "tsx scripts/setup-project-library.ts",
+    "remove:project-library": "tsx scripts/setup-project-library.ts --uninstall"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

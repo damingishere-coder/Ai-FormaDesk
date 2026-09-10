@@ -42,12 +42,6 @@ it("封面按版本落盘、刷新列表和撤销后可读，且不改变作品�
         .toBuffer()
     ).toString("base64");
   const first = await saveCover(pid, rid, image);
-  put("render", {
-    id: uid(),
-    projectId: pid,
-    revisionId: rid,
-    artifactId: "old-gray-render",
-  });
   expect(projectLibrary()[0].coverUrl).toBe(first.coverUrl);
   expect(get("project", pid)).toEqual(p);
   const artifact = get<any>("artifact", first.coverUrl.split("/").at(-1)!);
@@ -59,7 +53,7 @@ it("封面按版本落盘、刷新列表和撤销后可读，且不改变作品�
   expect(await saveCover(pid, rid, image)).toEqual(first);
   const cover = get<any>("cover", rid);
   put("cover", { ...cover, styleVersion: 1 });
-  expect(projectLibrary()[0].coverUrl).toBeNull();
+  expect(savedCover(pid, rid)).toBeNull();
   const refreshed = await saveCover(pid, rid, image);
   expect(refreshed.coverUrl).not.toBe(first.coverUrl);
   expect(fs.existsSync(artifact.path)).toBe(true);
@@ -91,4 +85,53 @@ it("封面按版本落盘、刷新列表和撤销后可读，且不改变作品�
   expect(fs.existsSync(path.join(root, "covers", pid))).toBe(false);
   expect(savedCover(pid, rid)).toBeNull();
   expect(get("project", other)).toBeDefined();
+});
+
+it("刷新替换同版本封面并优先于旧渲染图，失败保留旧封面且不改变模型版本", async () => {
+  const pid = uid(),
+    rid = uid();
+  const p = {
+    id: pid,
+    name: "刷新封面",
+    currentRevisionId: rid,
+    createdAt: "2026-09-10",
+    redo: [],
+  };
+  put("project", p);
+  put("revision", { id: rid, projectId: pid });
+  const image = async (color: string) =>
+    "data:image/png;base64," +
+    (
+      await sharp({
+        create: { width: 640, height: 400, channels: 3, background: color },
+      })
+        .png()
+        .toBuffer()
+    ).toString("base64");
+  const first = await saveCover(pid, rid, await image("#dd3333"));
+  put("render", {
+    id: uid(),
+    projectId: pid,
+    revisionId: rid,
+    artifactId: "old-render",
+    createdAt: "2026-09-10",
+  });
+  const second = await saveCover(pid, rid, await image("#3366cc"), true);
+  expect(second.coverUrl).not.toBe(first.coverUrl);
+  expect(projectLibrary().find((v) => v.id === pid)?.coverUrl).toBe(
+    second.coverUrl,
+  );
+  const file = get<any>("artifact", second.coverUrl.split("/").at(-1)!);
+  const pixels = await sharp(file.path).raw().toBuffer();
+  expect(pixels[2]).toBeGreaterThan(pixels[0]);
+  await expect(
+    saveCover(pid, rid, "data:image/png;base64,AAAA", true),
+  ).rejects.toThrow();
+  expect(savedCover(pid, rid)).toBe(second.coverUrl);
+  expect(get("project", pid)).toEqual(p);
+  put("project", { ...p, currentRevisionId: uid() });
+  await expect(
+    saveCover(pid, rid, await image("#22cc22"), true),
+  ).rejects.toThrow("版本已变化");
+  expect(savedCover(pid, rid)).toBe(second.coverUrl);
 });
