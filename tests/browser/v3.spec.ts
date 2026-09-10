@@ -134,7 +134,7 @@ test("真实建模、可调聊天、实时录制与上传", async ({ page }) => 
   );
   expect(snapshot.videos.at(-1).trajectory.samples.length).toBeGreaterThan(5);
   expect(errors).toEqual([]);
-  await page.getByRole("button", { name: "退出录制模式" }).click();
+  await page.getByRole("button", { name: "返回导出设置" }).click();
   await page.getByRole("button", { name: "返回工作台" }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await input.fill("窄屏多行草稿\n第二行\n第三行");
@@ -149,7 +149,7 @@ test('双视频关键帧、窄屏布局和录制退出恢复',async({page})=>{
  expect(frames.width).toBe(1280);expect(frames.height).toBe(720);for(let i=0;i<frames.frames.length;i++){const frame=frames.frames[i];expect(frame.red).toBeGreaterThan(1000);expect(frame.blue).toBeGreaterThan(1000);fs.writeFileSync(path.join(out,`${v.settings.mode}-frame-${i}.png`),Buffer.from(frame.png.split(',')[1],'base64'))}expect(Math.abs(frames.frames[0].center[0]-frames.frames[1].center[0])).toBeGreaterThan(10);fs.writeFileSync(path.join(out,`${v.settings.mode}-metrics.json`),JSON.stringify(frames.frames.map(({png,...rest}:any)=>rest)));
  }
  await page.setViewportSize({width:1195,height:762});const input=page.getByLabel('创作想法',{exact:true});await input.fill('草稿不能被录制清空');await page.getByRole('button',{name:'恢复默认布局'}).click();await page.waitForTimeout(350);await page.screenshot({path:path.join(out,'chat-desktop-final.png')});const normal=(await page.locator('.composer-wrap').boundingBox())!;expect(normal.height).toBeGreaterThan(500);
- await page.getByRole('button',{name:'收起创作对话',exact:true}).click();await page.getByRole('button',{name:'导出',exact:true}).click();await page.getByRole('tab',{name:'视频',exact:true}).click();await page.getByRole('button',{name:'进入录制模式'}).click();await page.getByRole('button',{name:'开始录制'}).click();await page.waitForTimeout(250);await page.keyboard.press('Escape');await expect(page.getByRole('dialog',{name:'录制结果'})).toBeVisible();await page.getByRole('button',{name:'退出录制模式'}).click();await page.getByRole('button',{name:'返回工作台'}).click();await expect(input).toHaveValue('草稿不能被录制清空');
+ await page.getByRole('button',{name:'收起创作对话',exact:true}).click();await page.getByRole('button',{name:'导出',exact:true}).click();await page.getByRole('tab',{name:'视频',exact:true}).click();await page.getByRole('button',{name:'进入录制模式'}).click();await page.getByRole('button',{name:'开始录制'}).click();await page.waitForTimeout(250);await page.keyboard.press('Escape');await expect(page.getByRole('dialog',{name:'录制结果'})).toBeVisible();await page.getByRole('button',{name:'返回导出设置'}).click();await page.getByRole('button',{name:'返回工作台'}).click();await expect(input).toHaveValue('草稿不能被录制清空');
  await page.setViewportSize({width:390,height:844});await input.fill('第一行\n第二行\n第三行\n第四行');await page.waitForTimeout(350);await page.screenshot({path:path.join(out,'chat-mobile-final.png')});const rect=(await page.locator('.composer-wrap').boundingBox())!;expect(rect.x).toBeGreaterThanOrEqual(0);expect(rect.width).toBe(366);expect(rect.y+rect.height).toBeLessThanOrEqual(844);expect((await input.boundingBox())!.height).toBeGreaterThan(70);
 });
 

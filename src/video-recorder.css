@@ -1,0 +1,119 @@
+.video-review-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #26332b4a;
+  backdrop-filter: blur(5px);
+}
+.video-recorder .video-review-backdrop .video-review {
+  position: relative;
+  inset: auto;
+  transform: none;
+  width: min(780px, 100%);
+  max-width: 100%;
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 22px;
+  border: 1px solid #e2e8df;
+  border-radius: 16px;
+  box-shadow: 0 24px 80px #15291b24;
+  background: #fff;
+}
+.video-review-header {
+  margin-bottom: 16px;
+}
+.video-review-navigation {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.video-review-navigation .button {
+  height: 35px;
+  padding: 0 12px;
+  font-size: 12px;
+  background: #f7f9f5;
+  border-color: #dfe7da;
+  color: #4d6947;
+}
+.video-review-title {
+  margin-top: 22px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+.video-review-title span {
+  font-size: 11px;
+  color: #92a18a;
+}
+.video-review-title h2 {
+  margin: 4px 0 0;
+  font-size: 20px;
+  color: #34422f;
+  font-weight: 600;
+}
+.video-review-backdrop .video-review video {
+  max-height: min(48dvh, 440px);
+  background: #f4f6f1;
+  border: 1px solid #e4eadf;
+}
+.video-review-backdrop .video-review-actions {
+  gap: 8px;
+  margin-top: 16px;
+}
+.video-review-actions .button {
+  font-size: 12px;
+  padding: 0 13px;
+}
+.video-review .video-review-save-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 0;
+  font-size: 11px;
+  color: #849278;
+}
+.video-review-save-hint svg {
+  flex-shrink: 0;
+}
+.video-review .video-review-error {
+  background: #fff1ea;
+  border: 1px solid #efd6c7;
+  padding: 10px 12px;
+  color: #a3593d;
+  border-radius: 8px;
+}
+.recording-back {
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .video-review-backdrop {
+    padding: 12px;
+  }
+  .video-recorder .video-review-backdrop .video-review {
+    padding: 15px;
+    max-height: calc(100dvh - 24px);
+  }
+  .video-review-navigation {
+    gap: 8px;
+  }
+  .video-review-navigation .button {
+    padding: 0 9px;
+    font-size: 11px;
+  }
+  .video-review-title {
+    margin-top: 16px;
+  }
+  .video-review-title h2 {
+    font-size: 18px;
+  }
+  .video-review .video-review-save-hint {
+    align-items: start;
+  }
+}
