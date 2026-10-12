@@ -214,6 +214,33 @@ async function finishPreview(j: Job, dir: string, signal: AbortSignal, resumeJob
     update(j, { status: signal.aborted ? "cancelled" : "failed", stage: "模型已保存，预览细节未完成", error: message, recoverablePreview: true });
   }
 }
+
+/** A saved model stays successful even when its optional detail task cannot start. */
+function schedulePreview(pid: string, rid: string, title?: string) {
+  let accepted: Job | undefined;
+  try {
+    const next = enqueue(pid, rid, "preview", { prompt: title || "预览细节" });
+    accepted = next;
+    put("revision", { ...revision(rid), preview: { status: "basic", jobId: next.id } });
+  } catch (error) {
+    if (accepted) throw error; // It is already queued; never create a duplicate task.
+    const message = (error as Error).message || "预览细节暂时无法开始";
+    const timestamp = now();
+    const failed: Job = {
+      id: uid(), projectId: pid, baseRevisionId: rid, type: "preview",
+      status: "failed", stage: "模型已保存，预览细节未开始", error: message,
+      resultRevisionId: rid, createdAt: timestamp, updatedAt: timestamp,
+      message: "基础模型已保存，可以稍后继续生成预览细节。",
+      title, recoverablePreview: true,
+      events: [{ stage: "模型已保存，预览细节未开始", at: timestamp, error: message }],
+    };
+    db.transaction(() => {
+      put("job", failed);
+      put("revision", { ...revision(rid), preview: { status: "failed", jobId: failed.id, error: message } });
+    })();
+    jobEvents.emit(failed.id, failed);
+  }
+}
 export function enqueue(
   pid: string,
   base: string | null,
@@ -289,7 +316,10 @@ export function enqueue(
   }
   put("project", { ...project(pid), updatedAt: now() });
   // One global Blender/AI pipeline at a time, keeping M2 memory usage bounded.
-  queue = queue.then(() => perform(j, p, payload, ctrl)).catch(() => {});
+  queue = queue.then(() => perform(j, p, payload, ctrl)).catch((error) => {
+    // A database failure can also prevent recording the failure itself.
+    console.error("任务状态无法保存", { jobId: j.id, projectId: pid, code: (error as NodeJS.ErrnoException).code || "STATE_WRITE_FAILED" });
+  });
   return j;
 }
 async function perform(
@@ -305,6 +335,7 @@ async function perform(
     return;
   }
   let dir = "";
+  let committedRevisionId: string | null = null;
   try {
     if (signal.aborted) throw new Error("任务已取消");
     update(j, {
@@ -603,13 +634,18 @@ async function perform(
       });
       if (["generate", "blender-edit"].includes(j.type)) addMessage(p.id, "assistant", summary);
     })();
+    committedRevisionId = rid;
     if (needsDetail && !signal.aborted) {
-      const next = enqueue(p.id, rid, "preview", { prompt: j.title || "预览细节" });
-      put("revision", { ...revision(rid), preview: { status: "basic", jobId: next.id } });
+      schedulePreview(p.id, rid, j.title);
     }
     if (j.baseRevisionId && (["blender-sync", "blender-edit"].includes(j.type) || payload.executor === "mcp")) blenderBridge.committed(p.id, j.baseRevisionId, rid);
   } catch (e) {
     if (["blender-sync", "blender-edit"].includes(j.type) || payload.executor === "mcp") blenderBridge.failed(p.id);
+    if (committedRevisionId) {
+      // Core records and files have committed. Never rewrite that result as failed.
+      console.error("模型已保存，后处理未完成", { jobId: j.id, projectId: p.id, revisionId: committedRevisionId, code: (e as NodeJS.ErrnoException).code || "POST_COMMIT_FAILED" });
+      return;
+    }
     update(j, {
       status: signal.aborted ? "cancelled" : "failed",
       stage: signal.aborted ? "已取消" : "失败",
