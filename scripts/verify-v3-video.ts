@@ -1,7 +1,10 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment({ http: true });
+const DATA = live.dataDir;
 import fs from "node:fs";
 import path from "node:path";
-const base = "http://127.0.0.1:18878";
-const out = path.resolve("data/v3-evidence");
+const base = live.baseURL!;
+const out = path.join(DATA, "v3-evidence");
 const session = await fetch(base + "/api/session");
 const { token } = (await session.json()) as any;
 const cookie = session.headers.get("set-cookie")!.split(";")[0];

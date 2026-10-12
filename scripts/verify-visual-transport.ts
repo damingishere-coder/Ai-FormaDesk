@@ -1,9 +1,11 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment({ ai: true });
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { visualRequest } from "../server/visual-ai";
-import { DATA } from "../server/config";
-const root = path.resolve("data/visual-transport-proof");
+const { visualRequest } = await import("../server/visual-ai");
+const { DATA } = await import("../server/config");
+const root = path.join(live.dataDir, "visual-transport-proof");
 fs.mkdirSync(root, { recursive: true });
 const results = [];
 for (const mode of ["cancel", "timeout"]) {

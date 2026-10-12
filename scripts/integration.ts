@@ -1,11 +1,13 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+requireLiveEnvironment();
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { DATA, ROOT } from "../server/config";
-import { runBlender } from "../server/sandbox";
-import { executeScene } from "../server/jobs";
-import { checkEnvironment } from "../server/environment";
-import { codex } from "../server/codex";
+const { DATA, ROOT } = await import("../server/config");
+const { runBlender } = await import("../server/sandbox");
+const { executeScene } = await import("../server/jobs");
+const { checkEnvironment } = await import("../server/environment");
+const { codex } = await import("../server/codex");
 const results: { name: string; passed: boolean; detail?: unknown }[] = [];
 async function test(name: string, fn: () => Promise<unknown>) {
   try {

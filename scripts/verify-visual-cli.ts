@@ -1,8 +1,11 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment({ ai: true });
 import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
-import { visualRequest, type ImageReceipt } from "../server/visual-ai";
-const dir = path.resolve("data/visual-cli-probe");
+import type { ImageReceipt } from "../server/visual-ai";
+const { visualRequest } = await import("../server/visual-ai");
+const dir = path.join(live.dataDir, "visual-cli-probe");
 fs.mkdirSync(dir, { recursive: true });
 const input = path.join(dir, "reference.png");
 await sharp(

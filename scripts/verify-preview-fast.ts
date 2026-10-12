@@ -1,15 +1,18 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment();
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { runBlender } from "../server/sandbox";
-import { ROOT } from "../server/config";
-import { optimizePreview } from "../server/preview-optimize";
+const { runBlender } = await import("../server/sandbox");
+const { ROOT, acquireDataOwnership } = await import("../server/config");
+acquireDataOwnership();
+const { optimizePreview } = await import("../server/preview-optimize");
 
 const input = process.argv[2];
 if (!input) throw new Error("用法：tsx scripts/verify-preview-fast.ts <已保存模型.blend>");
-const dir = fs.mkdtempSync(path.join(ROOT, "data", "preview-check-"));
+const dir = fs.mkdtempSync(path.join(live.dataDir, "preview-check-"));
 fs.copyFileSync(path.resolve(input), path.join(dir, "raw.blend"));
 const hash = (p: string) => createHash("sha256").update(fs.readFileSync(p)).digest("hex");
 const original = hash(path.resolve(input));

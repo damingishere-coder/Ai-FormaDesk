@@ -1,8 +1,10 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment();
 import fs from "node:fs";
 import path from "node:path";
-import { executeScene } from "../server/jobs";
-import { runBlender } from "../server/sandbox";
-import { ROOT } from "../server/config";
+const { executeScene } = await import("../server/jobs");
+const { runBlender } = await import("../server/sandbox");
+const { ROOT } = await import("../server/config");
 export const fixtures: Record<string, { prompt: string; script: string }> = {
   solid: {
     prompt:
@@ -38,6 +40,10 @@ export async function ensureFixture(
   root: string,
   signal: AbortSignal,
 ) {
+  const location = path.resolve(root);
+  if (location !== live.dataDir && !location.startsWith(live.dataDir + path.sep))
+    throw new Error("视觉夹具必须写入当前隔离 ZAOWU_DATA_DIR");
+  if (!Object.hasOwn(fixtures, name)) throw new Error("未知视觉夹具类别");
   const test = fixtures[name],
     source = path.join(root, name, "source");
   fs.mkdirSync(source, { recursive: true });

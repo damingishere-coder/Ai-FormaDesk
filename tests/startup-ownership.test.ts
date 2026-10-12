@@ -11,7 +11,7 @@ const cwd = fileURLToPath(new URL("..", import.meta.url));
 const roots: string[] = [];
 const children: ChildProcess[] = [];
 const root = () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forma-startup-owner-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "formadesk-live-startup-owner-"));
   roots.push(dir);
   return dir;
 };
@@ -21,6 +21,8 @@ function childEnv(dir: string, port = 0) {
     ZAOWU_DATA_DIR: dir,
     ZAOWU_PORT: String(port),
     ZAOWU_DESKTOP_TOKEN: "",
+    FORMA_LIVE_TESTS: "1",
+    FORMA_REAL_AI: "0",
     // A test must not invoke the installed Codex or Blender.
     ZAOWU_CODEX: path.join(dir, "not-installed-codex"),
     ZAOWU_BLENDER: path.join(dir, "not-installed-blender"),

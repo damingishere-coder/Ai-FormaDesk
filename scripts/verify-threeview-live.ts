@@ -1,11 +1,14 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment({ ai: true });
 import fs from "node:fs";
 import path from "node:path";
-import { runVisualPipeline } from "../server/visual-pipeline";
-import { executeScene, validateScene } from "../server/jobs";
-import { codex } from "../server/codex";
-import { runBlender } from "../server/sandbox";
-import { ROOT } from "../server/config";
-const root = path.resolve("data/threeview-live");
+const { runVisualPipeline } = await import("../server/visual-pipeline");
+const { executeScene, validateScene } = await import("../server/jobs");
+const { codex } = await import("../server/codex");
+const { runBlender } = await import("../server/sandbox");
+const { ROOT, acquireDataOwnership } = await import("../server/config");
+acquireDataOwnership();
+const root = path.join(live.dataDir, "threeview-live");
 fs.mkdirSync(root, { recursive: true });
 const empty = {
   objects: [],
@@ -14,7 +17,7 @@ const empty = {
   coordinates: "blender-z-up",
 } as const;
 const signal = new AbortController().signal;
-import { fixtures, ensureFixture } from "./visual-fixtures";
+const { fixtures, ensureFixture } = await import("./visual-fixtures");
 const chosen = process.argv[2] ? [process.argv[2]] : Object.keys(fixtures);
 const results: any[] = [];
 for (const name of chosen) {

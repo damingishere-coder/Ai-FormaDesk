@@ -1,16 +1,16 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+requireLiveEnvironment();
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { DATA } from "../server/config";
-import { environment } from "../server/environment";
-import { codex } from "../server/codex";
-import { enqueue, restore, artifactPath } from "../server/jobs";
-import { db, put, uid, get, project, revision } from "../server/store";
-import { blenderBridge } from "../server/blender-mcp";
-import { sessionGuard } from "../server/blender-mcp-code";
+const { DATA } = await import("../server/config");
+const { environment } = await import("../server/environment");
+const { codex } = await import("../server/codex");
+const { enqueue, restore, artifactPath } = await import("../server/jobs");
+const { db, put, uid, get, project, revision } = await import("../server/store");
+const { blenderBridge } = await import("../server/blender-mcp");
+const { sessionGuard } = await import("../server/blender-mcp-code");
 import type { Job, Project } from "../src/types";
-if (!DATA.includes("mcp-proof"))
-  throw new Error("必须使用独立 ZAOWU_DATA_DIR=.../mcp-proof");
 const report: any = { startedAt: new Date().toISOString(), steps: [] };
 async function done(job: Job) {
   const started = Date.now();
