@@ -182,6 +182,7 @@ export function App() {
     const observedJob = jobRef.current?.id;
     const v = await api<Snapshot>(`/projects/${id}/scene`);
     if (currentPid.current !== id || sequence !== loadSequence.current || jobRef.current?.id !== observedJob) return;
+    if (v?.project?.id !== id) throw new ApiRequestError("后台返回的项目归属无法确认，请重新加载后再操作。");
     setSnapshot(v);
     setSelected((s) => (v.scene.objects.some((o) => o.id === s) ? s : null));
     if (v.activeJob) setJob(v.activeJob);
@@ -383,16 +384,34 @@ export function App() {
       return true;
     } catch (error) {
       const uncertain = error instanceof ApiRequestError && error.outcomeUnknown;
-      const acceptedIn = (value?: Snapshot) => value?.project?.id === taskPid && [value.activeJob, ...(value.jobs || []).slice().reverse()].some(candidate => candidate && candidate.projectId === taskPid && !knownJobs.has(candidate.id) && candidate.type === expectedType);
+      const acceptedJobIn = (value?: Snapshot) => value?.project?.id === taskPid
+        ? [value.activeJob, ...(Array.isArray(value.jobs) ? value.jobs : []).slice().reverse()].find(candidate => candidate && typeof candidate.id === "string" && candidate.projectId === taskPid && !knownJobs.has(candidate.id) && candidate.type === expectedType)
+        : undefined;
+      const acceptedIn = (value?: Snapshot) => !!acceptedJobIn(value);
+      const candidate = error instanceof ApiRequestError && error.reconciled ? error.reconciliation as Snapshot | undefined : undefined;
+      const reconciliation = candidate?.project?.id === taskPid && Array.isArray(candidate.scene?.objects)
+        && Array.isArray(candidate.project.redo) && Array.isArray(candidate.messages) && Array.isArray(candidate.proposals)
+        && (!candidate.activeJob || candidate.activeJob.projectId === taskPid)
+        && (!candidate.revision || candidate.revision.projectId === taskPid)
+        ? candidate : undefined;
       if (sequence !== submissionSequence.current || !isContext(taskPid, expectedJobId)) {
         // A rejected old write keeps that project's draft; only verified acceptance consumes it.
-        return uncertain && acceptedIn((error as ApiRequestError).reconciliation as Snapshot | undefined);
+        return uncertain && acceptedIn(reconciliation);
       }
       let refreshed: Snapshot | undefined;
       try { refreshed = await load(taskPid); } catch { /* The original error remains actionable. */ }
       if (sequence !== submissionSequence.current || currentPid.current !== taskPid)
-        return uncertain && acceptedIn(refreshed || (error as ApiRequestError).reconciliation as Snapshot | undefined);
-      if (uncertain && acceptedIn(refreshed)) {
+        return uncertain && acceptedIn(refreshed || reconciliation);
+      const recovered = refreshed || reconciliation;
+      const accepted = acceptedJobIn(recovered);
+      if (uncertain && recovered && accepted) {
+          if (!refreshed) {
+            // The first read already proved acceptance; a later failed refresh cannot erase it.
+            if (!isContext(taskPid, expectedJobId)) return true;
+            if (!acceptJob(taskPid, expectedJobId, recovered.activeJob || accepted)) return false;
+            setSnapshot(recovered);
+            setSelected(value => recovered.scene.objects.some(object => object.id === value) ? value : null);
+          }
           // Snapshot is authoritative, including a follow-up preview after a completed write.
           setNotice("后台已接受任务，已恢复最新状态。请等待结果，无需重复提交。");
           return true;

@@ -141,6 +141,58 @@ test("任务已接受但响应断开时读取快照恢复，不重发模型请�
   expect(fixture.errors).toEqual([]);
 });
 
+test("已接受且完成的写请求保留首次核对快照，二次刷新断线不保留重发草稿", async ({ page }) => {
+  const fixture = await setup(page);
+  let accepted = false, recoveryReads = 0;
+  fixture.handlers["/api/projects/a/discuss"] = async route => {
+    const job = makeJob("a", "completed-on-server", "discuss", "succeeded");
+    fixture.snapshots.a.jobs!.push(job);
+    fixture.snapshots.a.messages.push({ id: "completed-reply", projectId: "a", role: "assistant", text: "后台已完成且只调用一次的回复", jobId: job.id, status: "completed", createdAt: day });
+    accepted = true;
+    await route.abort("failed");
+  };
+  fixture.handlers["/api/projects/a/scene"] = async route => {
+    if (accepted && ++recoveryReads > 1) return route.abort("failed");
+    await route.fulfill({ json: fixture.snapshots.a });
+  };
+  await page.goto("/"); await open(page);
+  const input = page.getByPlaceholder(/说说你的想法/);
+  await input.fill("已经被接受，不能作为未提交草稿再发送"); await input.press("Enter");
+  await expect(page.getByRole("status")).toContainText("后台已接受任务");
+  await expect(page.getByText("后台已完成且只调用一次的回复", { exact: true })).toBeVisible();
+  await expect(input).toHaveValue("");
+  await expect(input).toBeEnabled();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(recoveryReads).toBe(2);
+  expect(fixture.writes.filter(value => value.endsWith("/discuss"))).toHaveLength(1);
+  expect(fixture.errors).toEqual([]);
+});
+
+test("二次刷新断线时仍拒绝错误作品的首次核对快照", async ({ page }) => {
+  const fixture = await setup(page);
+  let sent = false, recoveryReads = 0;
+  const foreign = makeJob("b", "foreign-completed", "discuss", "succeeded");
+  fixture.snapshots.b.jobs!.push(foreign);
+  fixture.snapshots.b.messages.push({ id: "foreign-reply", projectId: "b", role: "assistant", text: "其他作品的回复不能进入当前界面", jobId: foreign.id, status: "completed", createdAt: day });
+  fixture.handlers["/api/projects/a/discuss"] = async route => { sent = true; await route.abort("failed"); };
+  fixture.handlers["/api/projects/a/scene"] = async route => {
+    if (!sent) return route.fulfill({ json: fixture.snapshots.a });
+    if (++recoveryReads === 1) return route.fulfill({ json: fixture.snapshots.b });
+    await route.abort("failed");
+  };
+  await page.goto("/"); await open(page);
+  const input = page.getByPlaceholder(/说说你的想法/);
+  await input.fill("错误归属时必须保留"); await input.press("Enter");
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(input).toHaveValue("错误归属时必须保留");
+  await expect(input).toBeEnabled();
+  await expect(page.getByText("其他作品的回复不能进入当前界面", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".project-trigger")).toContainText("作品 a");
+  expect(recoveryReads).toBe(2);
+  expect(fixture.writes.filter(value => value.endsWith("/discuss"))).toHaveLength(1);
+  expect(fixture.errors).toEqual([]);
+});
+
 test("错误归属的成功响应不接收为当前任务，也不丢弃当前草稿", async ({ page }) => {
   const fixture = await setup(page);
   fixture.handlers["/api/projects/a/discuss"] = route => route.fulfill({ status: 202, json: makeJob("b", "wrong-owner") });
