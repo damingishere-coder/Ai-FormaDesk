@@ -1,8 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-const base = "http://127.0.0.1:18878",
-  out = path.resolve("data/v3-evidence");
+import { liveEnvironment } from "./live-environment";
+const live = liveEnvironment();
+const base = live.baseURL,
+  out = path.join(live.dataDir, "browser-evidence/v3");
 fs.mkdirSync(out, { recursive: true });
 async function api(page: Page, route: string, body?: unknown) {
   return page.evaluate(
@@ -29,6 +31,7 @@ async function open(page: Page, pid: string) {
   await page.getByLabel("创作想法", { exact: true }).waitFor();
 }
 test("真实建模、可调聊天、实时录制与上传", async ({ page }) => {
+  test.skip(process.env.FORMA_REAL_AI !== "1", "真实 AI 生成还需显式设置 FORMA_REAL_AI=1");
   test.setTimeout(600000);
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));

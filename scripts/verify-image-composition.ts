@@ -1,3 +1,5 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment();
 // Isolated, deterministic Blender/Three.js framing check. Never calls the AI.
 import fs from "node:fs";
 import path from "node:path";
@@ -31,7 +33,6 @@ function clipTriangle(points: Point[], width: number, height: number) {
   return points;
 }
 
-process.env.ZAOWU_DATA_DIR = path.resolve("data/image-composition-validation");
 const { DATA, ROOT } = await import("../server/config");
 const { runBlender } = await import("../server/sandbox");
 const { executeScene, artifact } = await import("../server/jobs");

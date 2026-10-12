@@ -2,7 +2,9 @@ import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import type { Snapshot, Job } from "../../src/types";
-const evidence = path.resolve("data/acceptance");
+import { liveEnvironment } from "./live-environment";
+const live = liveEnvironment();
+const evidence = path.join(live.dataDir, "browser-evidence/acceptance");
 test("已保存真实场景的渲染、导出、失效提示与变换控件", async ({ page }) => {
   await page.goto("/");
   if (

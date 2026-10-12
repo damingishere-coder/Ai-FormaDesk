@@ -1,6 +1,6 @@
 {
   "name": "ai-formadesk",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -23,7 +23,12 @@
     "test:desktop": "node scripts/verify-desktop.mjs",
     "desktop:icons": "node scripts/build-app-icons.mjs",
     "setup:project-library": "tsx scripts/setup-project-library.ts",
-    "remove:project-library": "tsx scripts/setup-project-library.ts --uninstall"
+    "remove:project-library": "tsx scripts/setup-project-library.ts --uninstall",
+    "test:browser:live": "playwright test --config playwright.live.config.ts",
+    "test:browser:safety": "node scripts/verify-browser-safety.mjs",
+    "test:python": "python3 tests/plugin-source-open.py && python3 tests/scene-tree.py",
+    "check:revision-files": "tsx scripts/check-revision-files.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
@@ -31,15 +36,15 @@
     "@gltf-transform/core": "^4.5.0",
     "@gltf-transform/extensions": "^4.5.0",
     "@gltf-transform/functions": "^4.5.0",
-    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@react-three/drei": "^10.7.6",
     "@react-three/fiber": "^9.3.0",
     "better-sqlite3": "^12.2.0",
-    "fastify": "^5.6.0",
+    "fastify": "^5.12.5",
     "lucide-react": "^0.468.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "three": "^0.180.0",
     "zod": "^4.1.0"
   },

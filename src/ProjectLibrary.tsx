@@ -21,6 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
+import { useModalFocus } from "./modalFocus";
 import { ProjectCover } from "./ProjectCover";
 import { forgetProjectDraft } from "./Composer";
 import { Viewport, type ViewportHandle } from "./Viewport";
@@ -89,6 +90,18 @@ export function ProjectLibrary({
     [detailError, setDetailError] = useState("");
   const [media, setMedia] = useState<ProjectFile | null>(null),
     [retry, setRetry] = useState(0);
+  const modalOpener = useRef<HTMLElement>(null);
+  function rememberOpener(element: HTMLElement) {
+    modalOpener.current = element.getAttribute("role") === "menuitem"
+      ? element.closest(".home-project")?.querySelector<HTMLElement>("button[aria-expanded]") || element
+      : element;
+  }
+  const detailDialog = useRef<HTMLElement>(null), mediaDialog = useRef<HTMLElement>(null), editingDialog = useRef<HTMLFormElement>(null), confirmDialog = useRef<HTMLElement>(null);
+  const modalName = confirm ? "confirm" : editing !== null ? "editing" : media ? "media" : detail ? "detail" : false;
+  useModalFocus(!!detail, detailDialog, () => setDetail(null), modalOpener);
+  useModalFocus(!!media, mediaDialog, () => setMedia(null));
+  useModalFocus(editing !== null, editingDialog, () => setEditing(null), modalOpener);
+  useModalFocus(!!confirm, confirmDialog, () => setConfirm(null), modalOpener);
   const [imageErrors, setImageErrors] = useState<Record<string, boolean>>({});
   const [coverReady, setCoverReady] = useState(false);
   const [coverQueue, setCoverQueue] = useState<Project[]>([]);
@@ -189,6 +202,7 @@ export function ProjectLibrary({
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (modalName) return; // The focused dialog handles its own Escape.
         e.stopImmediatePropagation();
         if (confirm) setConfirm(null);
         else if (editing !== null) setEditing(null);
@@ -337,7 +351,8 @@ export function ProjectLibrary({
             {!trash && (
               <button
                 className="home-button primary"
-                onClick={() => {
+                onClick={event => {
+                  rememberOpener(event.currentTarget);
                   setEditing("");
                   setName("");
                 }}
@@ -556,14 +571,14 @@ export function ProjectLibrary({
                       <button
                         className="home-icon"
                         aria-label={`预览 ${p.name}`}
-                        onClick={() => setDetail({ id: p.id, tab: "preview" })}
+                        onClick={event => { rememberOpener(event.currentTarget); setDetail({ id: p.id, tab: "preview" }); }}
                       >
                         <Eye size={17} />
                       </button>
                       <button
                         className="home-icon"
                         aria-label={`查看文件 ${p.name}`}
-                        onClick={() => setDetail({ id: p.id, tab: "files" })}
+                        onClick={event => { rememberOpener(event.currentTarget); setDetail({ id: p.id, tab: "files" }); }}
                       >
                         <FolderOpen size={17} />
                       </button>
@@ -611,7 +626,7 @@ export function ProjectLibrary({
                         className="home-icon danger"
                         aria-label={`彻底删除 ${p.name}`}
                         disabled={busy}
-                        onClick={() => setConfirm(p)}
+                        onClick={event => { rememberOpener(event.currentTarget); setConfirm(p); }}
                       >
                         <Trash2 size={17} />
                       </button>
@@ -632,7 +647,8 @@ export function ProjectLibrary({
                     </button>
                     <button
                       role="menuitem"
-                      onClick={() => {
+                      onClick={event => {
+                        rememberOpener(event.currentTarget);
                         setDetail({ id: p.id, tab: "files" });
                         setMenu("");
                       }}
@@ -641,7 +657,8 @@ export function ProjectLibrary({
                     </button>
                     <button
                       role="menuitem"
-                      onClick={() => {
+                      onClick={event => {
+                        rememberOpener(event.currentTarget);
                         setEditing(p.id);
                         setName(p.name);
                         setMenu("");
@@ -698,7 +715,8 @@ export function ProjectLibrary({
               section === "all" && (
                 <button
                   className="home-button primary"
-                  onClick={() => {
+                  onClick={event => {
+                    rememberOpener(event.currentTarget);
                     setEditing("");
                     setName("");
                   }}
@@ -713,6 +731,7 @@ export function ProjectLibrary({
       {detail && (
         <div className="home-drawer-backdrop" onClick={() => setDetail(null)}>
           <section
+            ref={detailDialog}
             className={`home-drawer ${detail.tab === "preview" ? "wide" : ""}`}
             role="dialog"
             aria-modal="true"
@@ -954,6 +973,7 @@ export function ProjectLibrary({
       {media && (
         <div className="home-modal-backdrop" onClick={() => setMedia(null)}>
           <section
+            ref={mediaDialog}
             className="home-media"
             role="dialog"
             aria-modal="true"
@@ -986,6 +1006,7 @@ export function ProjectLibrary({
       {editing !== null && (
         <div className="home-modal-backdrop">
           <form
+            ref={editingDialog}
             className="home-form"
             role="dialog"
             aria-modal="true"
@@ -1007,7 +1028,7 @@ export function ProjectLibrary({
             <label>
               作品名称
               <input
-                autoFocus
+                data-modal-autofocus
                 aria-label={editing ? "作品新名称" : "新作品名称"}
                 placeholder="例如：重型摩托车"
                 value={name}
@@ -1037,6 +1058,7 @@ export function ProjectLibrary({
       {confirm && (
         <div className="home-modal-backdrop">
           <section
+            ref={confirmDialog}
             className="home-form"
             role="alertdialog"
             aria-modal="true"

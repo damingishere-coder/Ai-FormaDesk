@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DATA } from "../server/config";
-import { executeScene, artifact } from "../server/jobs";
-import { put, uid, now, db } from "../server/store";
-import { codex } from "../server/codex";
-if (!process.env.ZAOWU_DATA_DIR || !DATA.includes("desktop-smoke-"))
-  throw new Error("Fixture requires a dedicated desktop-smoke directory.");
+import os from "node:os";
+const configured = process.env.ZAOWU_DATA_DIR;
+if (!configured || !path.isAbsolute(configured)) throw new Error("Fixture requires dedicated desktop-smoke data.");
+const fixtureParent = fs.realpathSync(path.dirname(configured));
+const temporaryRoot = fs.realpathSync(os.tmpdir());
+if (!fixtureParent.startsWith(temporaryRoot + path.sep) || !path.basename(fixtureParent).startsWith("forma-desktop-smoke-") || path.basename(configured) !== "data" || (fs.existsSync(configured) && fs.realpathSync(configured) !== path.join(fixtureParent, "data")))
+  throw new Error("Fixture requires dedicated desktop-smoke data; no user DATA was opened.");
+const { DATA } = await import("../server/config");
+const { executeScene, artifact } = await import("../server/jobs");
+const { put, uid, now, db } = await import("../server/store");
+const { codex } = await import("../server/codex");
 const dir = path.join(DATA, "revisions", uid());
 fs.mkdirSync(dir, { recursive: true });
 fs.writeFileSync(

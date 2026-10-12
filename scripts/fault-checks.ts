@@ -1,3 +1,5 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+requireLiveEnvironment();
 import { request as rawHttp } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -5,12 +7,13 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import DB from "better-sqlite3";
-import { ROOT, DATA } from "../server/config";
-import { runProcess } from "../server/process";
+const { ROOT, DATA, acquireDataOwnership } = await import("../server/config");
+const { runProcess } = await import("../server/process");
+acquireDataOwnership();
 const root = path.join(DATA, "fault-checks", String(Date.now()));
 fs.mkdirSync(root, { recursive: true });
 const results: any[] = [];
-const origin = "http://127.0.0.1:18876";
+let origin = "";
 let child: ChildProcess | undefined,
   token = "";
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -52,10 +55,33 @@ async function boot() {
     ["--import", "tsx", path.join(ROOT, "server/index.ts")],
     {
       cwd: ROOT,
-      env: { ...process.env, ZAOWU_DATA_DIR: root, ZAOWU_PORT: "18876" },
-      stdio: "ignore",
+      env: { ...process.env, ZAOWU_DATA_DIR: root, ZAOWU_PORT: "0", ZAOWU_DESKTOP_TOKEN: "" },
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
     },
   );
+  // An IPC message from this exact child establishes the fresh listening port.
+  // Never probe a fixed URL that could already belong to the user's backend.
+  const running = child;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => finish(new Error("隔离故障后台启动超时")), 30000);
+    const closed = () => finish(new Error("隔离故障后台未就绪即退出"));
+    const message = (value: unknown) => {
+      const ready = value as { type?: string; port?: number };
+      if (ready?.type !== "forma-ready" || !Number.isInteger(ready.port) || ready.port! < 1024 || ready.port! > 65535) return;
+      origin = `http://127.0.0.1:${ready.port}`;
+      finish();
+    };
+    function finish(error?: Error) {
+      clearTimeout(timer);
+      running.off("message", message);
+      running.off("exit", closed);
+      running.off("error", finish);
+      error ? reject(error) : resolve();
+    }
+    running.on("message", message);
+    running.once("exit", closed);
+    running.once("error", finish);
+  });
   await waitFor(async () => {
     const r = await fetch(origin + "/api/session");
     token = ((await r.json()) as any).token;

@@ -36,9 +36,35 @@ npm test
 npm run build
 npm audit --omit=dev --audit-level=high
 python3 tests/plugin-source-open.py
+python3 tests/scene-tree.py
+node scripts/verify-browser-safety.mjs
+npm run test:browser
+# test:e2e 也是同一安全 mock 入口
+npm run test:e2e
 ```
 
-`npm run test:browser` 包含多种测试，部分会调用真实 AI、消耗额度。为 UI 回归选择具体 spec，并连接本次构建的独立服务，不能把用户正在使用的旧服务当成本次代码。模拟接口测试仅证明界面行为。
+`test:browser` / `test:e2e` 默认只跑安全 mock UI 回归。Playwright 自动启动本源码的独立 Vite（默认 `127.0.0.1:19143`），没有后台代理、不打开 SQLite、不启动 Codex/Blender，也不复用用户已有服务。端口占用会拒绝启动；并行验证可设置另一个 `FORMA_MOCK_PORT`，不能使用常用服务端口 8765/5173。
+
+所有安全 spec 使用 `tests/browser/fixtures.ts` 的 `test/expect`。只 mock 明确 API 契约；未 mock 请求、外部请求和直接 `page.request`/`request` 调用会失败。Vite 对漏过路由的 `/api` 也拒绝，避免连到用户后台。不要用通用 `{}` 回应未知接口来让测试通过。`verify-browser-safety.mjs` 在临时目录中检查这些请求与危险 live 配置确实被拒绝；不会执行真实后台验收。UI mock 证明界面与请求契约，不证明真实 AI、Blender 或产物质量。`scene-tree.py` 单独执行真实 Worker 命令分支的内存夹具，验证深树/删除顺序/稳定 ID，不读取用户场景。
+
+```sh
+# 只跑指定 UI 回归；仍自动使用独立 Vite 与网络护栏
+npm run test:browser -- tests/browser/preview-progress.spec.ts
+```
+
+真实后台验收独立使用 `playwright.live.config.ts`；必须显式 opt-in、独立临时 DATA 和后台 URL。配置会启动本源码后台，`reuseExistingServer=false`，不能接到正在使用的桌面/后台。先完成 build，再准备本轮所需独立样例；历史 V1/V2/V3 spec 的旧交互与前提仍需按当轮验收范围核对，不能只因护栏通过就声称 live 全链路通过。默认不会运行读取历史 GLB 的 `@asset` 验收。
+
+```sh
+FORMA_LIVE_DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/formadesk-live-XXXXXX")"
+export FORMA_LIVE_DATA_DIR
+export FORMA_LIVE_TESTS=1
+export FORMA_LIVE_URL=http://127.0.0.1:19145
+npm run build
+npm run test:browser:live -- tests/browser/render.spec.ts
+# 包含 generate/discuss 的真实 AI 验收还需主动设置 FORMA_REAL_AI=1，会消耗额度。
+```
+
+真实验收证据统一写入该临时 DATA 的 `browser-evidence/`，不写默认 `data`。未显式开启 live、DATA 非独立临时目录、URL 指向常用服务端口时会直接拒绝。
 
 ```sh
 npm run desktop:dist

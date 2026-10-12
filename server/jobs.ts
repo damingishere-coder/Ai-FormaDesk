@@ -11,7 +11,8 @@ import { assertExecution, environment } from "./environment";
 import { codex } from "./codex";
 import { attachmentPath, validateAttachments } from "./attachments";
 import { runVisualPipeline } from "./visual-pipeline";
-import { archiveVisual } from "./visual-archive";
+import { commitRevision } from "./revision-commit";
+import { artifact, artifactPath } from "./artifacts";
 import { optimizePreview } from "./preview-optimize";
 import {
   db,
@@ -29,7 +30,6 @@ import {
 import {
   sceneSchema,
   type Job,
-  type Revision,
   type Project,
   type Proposal,
   type Message,
@@ -39,36 +39,9 @@ jobEvents.setMaxListeners(100);
 const controllers = new Map<string, AbortController>();
 const queuedPayloads = new Map<string, any>();
 let queue = Promise.resolve();
-export type Artifact = {
-  id: string;
-  projectId: string;
-  path: string;
-  name: string;
-  mime: string;
-};
-export function artifact(
-  file: string,
-  pid: string,
-  name: string,
-  mime: string,
-) {
-  const id = uid();
-  put("artifact", { id, projectId: pid, path: file, name, mime });
-  return id;
-}
-export function artifactPath(id: string) {
-  const a = get<Artifact>("artifact", id);
-  if (!a) throw Object.assign(new Error("文件不存在"), { statusCode: 404 });
-  const real = fs.realpathSync(a.path);
-  if (
-    !real.startsWith(fs.realpathSync(DATA) + path.sep) ||
-    !fs.statSync(real).isFile()
-  )
-    throw new Error("文件不在工作台目录中");
-  return real;
-}
-function update(j: Job, values: Partial<Job>) {
-  Object.assign(j, values, { updatedAt: now() });
+export { artifact, artifactPath, type Artifact } from "./artifacts";
+function changedJob(current: Job, values: Partial<Job>) {
+  const j = Object.assign(structuredClone(current), values, { updatedAt: now() });
   if (values.stage) {
     if (values.message === undefined) j.message = "";
     const previous = j.events?.at(-1);
@@ -87,7 +60,12 @@ function update(j: Job, values: Partial<Job>) {
     ];
     if (j.type === "generate") j.estimate = estimateJob(j, list<Job>("job"));
   }
-  put("job", j);
+  return j;
+}
+function update(j: Job, values: Partial<Job>) {
+  const next = changedJob(j, values);
+  put("job", next);
+  Object.assign(j, next);
   jobEvents.emit(j.id, j);
 }
 export function assertBase(pid: string, base: string | null) {
@@ -214,6 +192,33 @@ async function finishPreview(j: Job, dir: string, signal: AbortSignal, resumeJob
     update(j, { status: signal.aborted ? "cancelled" : "failed", stage: "模型已保存，预览细节未完成", error: message, recoverablePreview: true });
   }
 }
+
+/** A saved model stays successful even when its optional detail task cannot start. */
+function schedulePreview(pid: string, rid: string, title?: string) {
+  let accepted: Job | undefined;
+  try {
+    const next = enqueue(pid, rid, "preview", { prompt: title || "预览细节" });
+    accepted = next;
+    put("revision", { ...revision(rid), preview: { status: "basic", jobId: next.id } });
+  } catch (error) {
+    if (accepted) throw error; // It is already queued; never create a duplicate task.
+    const message = (error as Error).message || "预览细节暂时无法开始";
+    const timestamp = now();
+    const failed: Job = {
+      id: uid(), projectId: pid, baseRevisionId: rid, type: "preview",
+      status: "failed", stage: "模型已保存，预览细节未开始", error: message,
+      resultRevisionId: rid, createdAt: timestamp, updatedAt: timestamp,
+      message: "基础模型已保存，可以稍后继续生成预览细节。",
+      title, recoverablePreview: true,
+      events: [{ stage: "模型已保存，预览细节未开始", at: timestamp, error: message }],
+    };
+    db.transaction(() => {
+      put("job", failed);
+      put("revision", { ...revision(rid), preview: { status: "failed", jobId: failed.id, error: message } });
+    })();
+    jobEvents.emit(failed.id, failed);
+  }
+}
 export function enqueue(
   pid: string,
   base: string | null,
@@ -289,7 +294,10 @@ export function enqueue(
   }
   put("project", { ...project(pid), updatedAt: now() });
   // One global Blender/AI pipeline at a time, keeping M2 memory usage bounded.
-  queue = queue.then(() => perform(j, p, payload, ctrl)).catch(() => {});
+  queue = queue.then(() => perform(j, p, payload, ctrl)).catch((error) => {
+    // A database failure can also prevent recording the failure itself.
+    console.error("任务状态无法保存", { jobId: j.id, projectId: pid, code: (error as NodeJS.ErrnoException).code || "STATE_WRITE_FAILED" });
+  });
   return j;
 }
 async function perform(
@@ -305,6 +313,7 @@ async function perform(
     return;
   }
   let dir = "";
+  let committedRevisionId: string | null = null;
   try {
     if (signal.aborted) throw new Error("任务已取消");
     update(j, {
@@ -546,74 +555,36 @@ async function perform(
       throw new Error("版本已变化，任务结果未覆盖当前项目");
     // Host copies verified output out of the writable job sandbox into immutable revision storage.
     update(j, { stage: "保存作品", error: null });
-    const rid = uid();
-    const out = path.join(DATA, "revisions", rid);
-    fs.mkdirSync(out, { recursive: true });
-    const artifacts: any = {};
-    const previewReport = path.join(dir, "preview.json");
-    const needsDetail = fs.existsSync(previewReport) && !JSON.parse(fs.readFileSync(previewReport, "utf8")).complete;
-    const files = [
-      ["blend", "scene.blend", "application/x-blender"],
-      ["glb", "scene.glb", "model/gltf-binary"],
-      ["manifest", "scene.json", "application/json"],
-      ["script", "generated.py", "text/x-python"],
-      ["log", "execution.log", "text/plain"],
-    ];
-    db.transaction(() => {
-      for (const [key, name, mime] of files) {
-        const f = path.join(out, name);
-        fs.copyFileSync(path.join(dir, name), f);
-        fs.chmodSync(f, 0o400);
-        artifacts[key] = artifact(f, p.id, `Ai-FormaDesk-${rid}-${name}`, mime);
-      }
-      if (fs.existsSync(path.join(dir, "textures"))) fs.cpSync(path.join(dir, "textures"), path.join(out, "textures"), { recursive: true });
-      const visual = j.visual ? archiveVisual(j.visual, out, artifactPath, (f, label, mime) => artifact(f, p.id, label, mime)) : undefined;
-      const r: Revision = {
-        preview: { status: needsDetail ? "basic" : "ready" },
-        visual,
-        id: rid,
-        projectId: p.id,
-        parentId: j.baseRevisionId,
-        source: j.type,
-        label: j.type === "generate" ? payload.prompt : summary,
-        createdAt: now(),
-        scene: scene!,
-        artifacts,
-      };
-      put("revision", r);
-      invalidateProposals(p.id);
-      put("project", {
-        ...project(p.id),
-        currentRevisionId: rid,
-        redo: [],
-        updatedAt: now(),
-      });
-      if (payload.proposalId)
-        put("proposal", {
-          ...get<Proposal>("proposal", payload.proposalId)!,
-          status: "succeeded",
-        });
-
-      update(j, {
-        status: "succeeded",
-        stage: "完成",
-        resultRevisionId: rid,
-        recoverablePreview: false,
-        message: summary,
-      });
-      if (["generate", "blender-edit"].includes(j.type)) addMessage(p.id, "assistant", summary);
-    })();
+    const saved = commitRevision({
+      job: j, dir, scene, signal, summary,
+      label: j.type === "generate" ? payload.prompt : summary,
+      proposalId: payload.proposalId,
+      completedJob: rid => changedJob(j, {
+        status: "succeeded", stage: "完成", resultRevisionId: rid,
+        recoverablePreview: false, message: summary,
+      }),
+    });
+    const rid = saved.revision.id;
+    committedRevisionId = rid;
+    Object.assign(j, saved.job);
+    jobEvents.emit(j.id, j);
+    const needsDetail = saved.needsDetail;
     if (needsDetail && !signal.aborted) {
-      const next = enqueue(p.id, rid, "preview", { prompt: j.title || "预览细节" });
-      put("revision", { ...revision(rid), preview: { status: "basic", jobId: next.id } });
+      schedulePreview(p.id, rid, j.title);
     }
     if (j.baseRevisionId && (["blender-sync", "blender-edit"].includes(j.type) || payload.executor === "mcp")) blenderBridge.committed(p.id, j.baseRevisionId, rid);
   } catch (e) {
     if (["blender-sync", "blender-edit"].includes(j.type) || payload.executor === "mcp") blenderBridge.failed(p.id);
+    if (committedRevisionId) {
+      // Core records and files have committed. Never rewrite that result as failed.
+      console.error("模型已保存，后处理未完成", { jobId: j.id, projectId: p.id, revisionId: committedRevisionId, code: (e as NodeJS.ErrnoException).code || "POST_COMMIT_FAILED" });
+      return;
+    }
     update(j, {
       status: signal.aborted ? "cancelled" : "failed",
       stage: signal.aborted ? "已取消" : "失败",
       error: (e as Error).message || "执行失败",
+      resultRevisionId: null,
     });
     if (j.type === "generate")
       addMessage(p.id, "error", j.error!, { jobId: j.id });

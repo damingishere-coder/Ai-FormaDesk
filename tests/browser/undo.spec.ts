@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import type { Snapshot, Revision } from "../../src/types";
 
 test("撤销直接回到上一步，支持连续撤销和重做；历史列表单独打开", async ({ page }, testInfo) => {

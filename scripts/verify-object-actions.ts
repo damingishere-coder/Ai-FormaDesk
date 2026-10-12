@@ -1,12 +1,16 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment({ http: true });
+const DATA = live.dataDir;
 import { chromium, expect } from "@playwright/test";
 import fs from "node:fs";
+import path from "node:path";
 const s = JSON.parse(
-    fs.readFileSync("data/acceptance/final-scene.json", "utf8"),
+    fs.readFileSync(path.join(DATA, "acceptance", "final-scene.json"), "utf8"),
   ),
   pid = s.project.id;
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({
-  baseURL: "http://127.0.0.1:8765",
+  baseURL: live.baseURL!,
   viewport: { width: 1280, height: 800 },
 });
 await page.addInitScript((p) => localStorage.setItem("forma-project", p), pid);
@@ -69,7 +73,7 @@ try {
     lit.scene.objects.find((o: any) => o.id === light.id).light,
   ).toMatchObject({ energy: 123, color: "#ffe0c0" });
   fs.writeFileSync(
-    "data/acceptance/object-actions-result.json",
+    path.join(DATA, "acceptance", "object-actions-result.json"),
     JSON.stringify(
       {
         passed: true,

@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { lockDesktopData } from "../server/data-lock";
 const require = createRequire(import.meta.url);
 const { sameOrigin, safeExternal } = require("../desktop/policy.cjs");
@@ -32,6 +33,18 @@ describe("desktop navigation boundaries", () => {
     ])
       expect(safeExternal(url)).toBe(false);
   });
+});
+it("desktop fixture rejects ordinary DATA before opening SQLite or running Blender", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forma-desktop-guard-"));
+  try {
+    const result = spawnSync(process.execPath, ["--import", "tsx", "scripts/desktop-fixture.ts"], {
+      cwd: process.cwd(), env: { ...process.env, ZAOWU_DATA_DIR: dir }, encoding: "utf8", timeout: 10000,
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("dedicated desktop-smoke data");
+    expect(fs.readdirSync(dir)).toEqual([]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 it("refuses a second live backend and releases its own directory lock", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "forma-desktop-lock-"));

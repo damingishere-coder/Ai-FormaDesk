@@ -1,12 +1,15 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment();
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import sharp from "sharp";
 import { objectColorMaps } from "./preview-proof-utils";
-import { executeScene, validateScene } from "../server/jobs";
-import { runBlender } from "../server/sandbox";
-import { ROOT } from "../server/config";
-const root = path.resolve("data/visual-preservation-proof"),
+const { executeScene, validateScene } = await import("../server/jobs");
+const { runBlender } = await import("../server/sandbox");
+const { ROOT, acquireDataOwnership } = await import("../server/config");
+acquireDataOwnership();
+const root = path.join(live.dataDir, "visual-preservation-proof"),
   signal = new AbortController().signal;
 fs.mkdirSync(root, { recursive: true });
 async function trusted(dir: string, mode: string, config: object, ok = true) {

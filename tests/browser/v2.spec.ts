@@ -2,8 +2,10 @@ import { test, expect, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import type { Snapshot } from "../../src/types";
-const base = process.env.FORMA_TEST_URL || "http://127.0.0.1:18877";
-const evidence = path.resolve("data/v2-evidence");
+import { liveEnvironment } from "./live-environment";
+const live = liveEnvironment();
+const base = live.baseURL;
+const evidence = path.join(live.dataDir, "browser-evidence/v2");
 async function api(page: Page, route: string, body?: unknown, method?: string) {
   return page.evaluate(
     async ({ route, body, method }) => {
@@ -46,6 +48,7 @@ test.beforeEach(async ({ page }) => {
 test("图片上传重试、粘贴拖入、聊天伸展、草稿和临时预览隔离", async ({
   page,
 }) => {
+  test.skip(process.env.FORMA_REAL_AI !== "1", "包含真实 discuss 输入拒绝验证，还需显式设置 FORMA_REAL_AI=1");
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   const p = await create(page, "图片交互测试"),

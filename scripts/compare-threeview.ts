@@ -1,12 +1,15 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment({ ai: true });
 import fs from "node:fs";
 import path from "node:path";
-import { fixtures, ensureFixture } from "./visual-fixtures";
-import { codex } from "../server/codex";
-import { executeScene } from "../server/jobs";
-import { runBlender } from "../server/sandbox";
-import { ROOT } from "../server/config";
-import { visualRequest } from "../server/visual-ai";
-const root = path.resolve("data/threeview-live"),
+const { fixtures, ensureFixture } = await import("./visual-fixtures");
+const { codex } = await import("../server/codex");
+const { executeScene } = await import("../server/jobs");
+const { runBlender } = await import("../server/sandbox");
+const { ROOT, acquireDataOwnership } = await import("../server/config");
+acquireDataOwnership();
+const { visualRequest } = await import("../server/visual-ai");
+const root = path.join(live.dataDir, "threeview-live"),
   signal = new AbortController().signal;
 const results: any[] = [];
 for (const name of process.argv.slice(2).length

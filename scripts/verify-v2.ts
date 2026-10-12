@@ -1,10 +1,13 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+const live = requireLiveEnvironment({ http: true, ai: true });
+const DATA = live.dataDir;
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import sharp from "sharp";
 import type { Job, Snapshot } from "../src/types";
-const base = process.env.FORMA_TEST_URL || "http://127.0.0.1:18877";
-const evidence = path.resolve("data/v2-evidence");
+const base = live.baseURL!;
+const evidence = path.join(DATA, "v2-evidence");
 fs.mkdirSync(evidence, { recursive: true });
 const session = await fetch(base + "/api/session");
 const { token } = await session.json();

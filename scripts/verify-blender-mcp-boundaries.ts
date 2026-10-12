@@ -1,16 +1,16 @@
+import { requireLiveEnvironment } from "./require-live-environment";
+requireLiveEnvironment({ ai: true });
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { DATA } from "../server/config";
-import { environment } from "../server/environment";
-import { blenderBridge } from "../server/blender-mcp";
-import { sessionGuard } from "../server/blender-mcp-code";
-import { enqueue } from "../server/jobs";
-import { db, get, project, revision } from "../server/store";
+const { DATA } = await import("../server/config");
+const { environment } = await import("../server/environment");
+const { blenderBridge } = await import("../server/blender-mcp");
+const { sessionGuard } = await import("../server/blender-mcp-code");
+const { enqueue } = await import("../server/jobs");
+const { db, get, project, revision } = await import("../server/store");
 import type { Job } from "../src/types";
 
-if (!DATA.includes("mcp-proof"))
-  throw new Error("必须使用独立 mcp-proof 验收数据目录");
 const previous = JSON.parse(
   fs.readFileSync(path.join(DATA, "acceptance.json"), "utf8"),
 );

@@ -491,9 +491,6 @@ const actualPort = typeof address === "object" && address ? address.port : PORT;
 allowedHosts.add(`127.0.0.1:${actualPort}`);
 allowedHosts.add(`localhost:${actualPort}`);
 const stopLibraryCache = startLibraryCache(actualPort);
-console.log(`Ai-FormaDesk: http://127.0.0.1:${actualPort}`);
-process.send?.({ type: "forma-ready", port: actualPort });
-void checkEnvironment();
 let stopping = false;
 async function stop() {
   if (stopping) return;
@@ -514,3 +511,8 @@ if (desktopToken) {
   process.on("message", (message: any) => { if (message?.type === "forma-stop") void stop(); });
   process.on("disconnect", () => { void stop(); });
 }
+
+// Report readiness only after shutdown handlers exist, including parent disconnect.
+console.log(`Ai-FormaDesk: http://127.0.0.1:${actualPort}`);
+process.send?.({ type: "forma-ready", port: actualPort });
+void checkEnvironment();

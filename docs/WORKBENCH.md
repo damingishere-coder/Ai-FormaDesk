@@ -64,9 +64,12 @@ npm run protocol  # 从当前 CLI 重新生成官方类型；不会升级 CLI
 npm run check:environment
 npm test
 npm run test:integration
-npm run test:e2e  # 会调用真实 Codex，消耗本机账户额度，并创建验收项目
+npm run test:e2e  # 默认安全 mock UI；独立 Vite，不启动真实后台/AI/Blender
+python3 tests/scene-tree.py # 深子树/删除/复制的隔离逻辑回归，不访问用户场景
 npx tsx scripts/fault-checks.ts # 需要 data/acceptance/final-scene.json；独立数据测试
 ```
+
+`test:browser` 与 `test:e2e` 使用同一个安全配置，所有 API 都由明确 mock 契约接管；遗漏接口会失败，不能自动落到 8765 的用户后台。测试 Vite 默认端口 19143，禁止复用已有服务。真实后台/AI 浏览器验收已分到 `test:browser:live`，要求 `FORMA_LIVE_TESTS=1`、独立的系统临时 `formadesk-live-*` DATA、明确 `FORMA_LIVE_URL`；AI 生成还需 `FORMA_REAL_AI=1`。准备与命令见 [开发指南的验证部分](../DEVELOPMENT.md#验证)。模拟 UI 通过不能代表真实建模或产物质量通过。
 
 启动检查页在右下角设置按钮中。未登录时请自行在本机终端检查 `codex login status` 并完成原有登录。模型不可用、额度不足或凭据失效时，已保存模型仍可查看、手动编辑与导出。错误任务不会覆盖成功版本。
 

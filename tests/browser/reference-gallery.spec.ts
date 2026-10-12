@@ -1,4 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "./fixtures";
+import type { Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -16,16 +17,21 @@ async function setup(page: Page) {
   await page.addInitScript(id => localStorage.setItem("forma-project", id), id);
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url()).pathname;
-    if (url.startsWith("/api/artifacts/")) {
+    if (/^\/api\/artifacts\/image-[0-4]$/.test(url)) {
       const index = Number(url.split("image-").at(-1));
       const names = ["original-1.png", "references-single/front.png", "references-single/right.png", "references-single/top.png"];
       const file = process.env.REFERENCE_QA_IMAGES && names[index] ? path.join(process.env.REFERENCE_QA_IMAGES, names[index]) : "";
       if (file && fs.existsSync(file)) return route.fulfill({ contentType: "image/png", body: fs.readFileSync(file) });
       return route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300"><rect width="300" height="300" fill="white"/><path d="M65 220L150 70l85 150z" fill="#577c63"/></svg>' });
     }
-    return route.fulfill({ json: url === "/api/session" ? { token: "fixture" } : url === "/api/health" ? { ok: true, codex: { ok: true } } : url === "/api/projects" ? [project] : url.endsWith("/scene") ? snapshot : recent });
+    if (url === "/api/projects") return route.fulfill({ json: [project] });
+    if (url === `/api/projects/${id}/opened`) return route.fulfill({ json: project });
+    if (url === `/api/projects/${id}/scene`) return route.fulfill({ json: snapshot });
+    if (url === `/api/jobs/${recent.id}`) return route.fulfill({ json: recent });
+    if (url === `/api/jobs/${old.id}`) return route.fulfill({ json: old });
+    return route.fallback();
   });
-  await page.goto(process.env.REFERENCE_UI_BASE || "/");
+  await page.goto("/");
   await page.getByRole("button", { name: "打开 三视图测试作品", exact: true }).click();
   await page.getByRole("button", { name: "参考与三视图", exact: true }).click();
   return page.getByRole("dialog", { name: "参考与三视图", exact: true });

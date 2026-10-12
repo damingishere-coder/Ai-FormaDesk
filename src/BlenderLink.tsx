@@ -1,14 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Box, Loader2, RefreshCw, Unplug } from "lucide-react";
 import { api } from "./api";
 import type { BlenderStatus } from "./blenderTypes";
-import type { Job } from "./types";
 import "./blender-link.css";
 export function BlenderLink({
   pid,
   base,
   busy,
-  onJob,
+  onStartJob,
   onError,
   objectId,
 }: {
@@ -16,7 +15,7 @@ export function BlenderLink({
   objectId: string | null;
   base: string | null;
   busy: boolean;
-  onJob: (job: Job) => void;
+  onStartJob: (endpoint: string, body: unknown) => Promise<boolean>;
   onError: (message: string) => void;
 }) {
   const [status, setStatus] = useState<BlenderStatus>({
@@ -28,44 +27,65 @@ export function BlenderLink({
   const [expanded, setExpanded] = useState(false);
   const [image, setImage] = useState("");
   const [instruction, setInstruction] = useState("");
+  const [statusError, setStatusError] = useState("");
+  const mounted = useRef(false), pendingLock = useRef(false), statusSequence = useRef(0);
+  const context = useRef({ pid, base });
+  context.current = { pid, base };
   useEffect(() => {
-    let alive = true;
-    const refresh = () =>
-      api<BlenderStatus>("/blender/status")
-        .then((s) => {
-          if (alive) setStatus(s);
-        })
-        .catch(() => {});
-    void refresh();
-    const timer = setInterval(refresh, 5000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
+    mounted.current = true;
+    return () => { mounted.current = false; statusSequence.current++; };
+  }, []);
+  async function refreshStatus(signal?: AbortSignal) {
+    const sequence = ++statusSequence.current;
+    try {
+      const value = await api<BlenderStatus>("/blender/status", undefined, undefined, { signal });
+      if (mounted.current && sequence === statusSequence.current) {
+        setStatus(value);
+        setStatusError("");
+      }
+    } catch (error) {
+      if (mounted.current && sequence === statusSequence.current && !signal?.aborted) {
+        setStatus(value => ({ ...value, connected: false }));
+        setStatusError("连接状态已过期：" + (error as Error).message);
+      }
+    }
+  }
+  useEffect(() => {
+    const controller = new AbortController();
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try { await refreshStatus(controller.signal); }
+      finally { refreshing = false; }
     };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 5000);
+    return () => { controller.abort(); statusSequence.current++; clearInterval(timer); };
   }, [pid, base]);
   const linked = status.projectId === pid;
   async function action(name: string, sessionId?: string) {
-    if (pending || busy) return;
+    if (pendingLock.current || busy) return;
+    const expected = { pid, base };
+    const validContext = () => mounted.current && context.current.pid === expected.pid && context.current.base === expected.base;
+    pendingLock.current = true;
     setPending(true);
     try {
-      const result = await api(
-        `/projects/${pid}/blender/${name}`,
-        name === "recover"
-          ? { sessionId }
-          : name === "edit"
-            ? { baseRevisionId: base, objectId, prompt: instruction }
-            : name === "sync"
-              ? { baseRevisionId: base }
-              : {},
-      );
+      const body = name === "recover" ? { sessionId } : name === "edit"
+        ? { baseRevisionId: base, objectId, prompt: instruction }
+        : name === "sync" ? { baseRevisionId: base } : {};
       if (name === "sync" || name === "edit") {
-        onJob(result);
-        if (name === "edit") setInstruction("");
-      } else setStatus(result);
-    } catch (e) {
-      onError((e as Error).message);
+        const accepted = await onStartJob(`blender/${name}`, body);
+        if (accepted && name === "edit" && validContext()) setInstruction("");
+      } else {
+        const result = await api<BlenderStatus>(`/projects/${pid}/blender/${name}`, body);
+        if (validContext()) { statusSequence.current++; setStatus(result); setStatusError(""); }
+      }
+    } catch (error) {
+      if (validContext()) onError((error as Error).message);
     } finally {
-      setPending(false);
+      pendingLock.current = false;
+      if (mounted.current) setPending(false);
     }
   }
   return (
@@ -82,8 +102,9 @@ export function BlenderLink({
       {expanded && (
         <section className="blender-popover" aria-label="Blender 连接面板">
           <strong>Blender 联动</strong>
+          {statusError && <p className="blender-warning" role="alert">{statusError}</p>}
           <p>
-            {!status.installed
+            {statusError ? "暂时无法确认 Blender 连接，请刷新后再同步。" : !status.installed
               ? "尚未安装 Blender MCP"
               : linked
                 ? status.connected
@@ -105,6 +126,7 @@ export function BlenderLink({
             <p className="blender-warning">{status.error}</p>
           )}
           <div className="blender-link-actions">
+            {statusError && <button className="button" disabled={pending} onClick={() => { void refreshStatus(); }}>刷新连接状态</button>}
             {!status.projectId &&
               status.recoverable
                 ?.filter((r) => r.projectId === pid)
@@ -125,7 +147,7 @@ export function BlenderLink({
             {!linked && (
               <button
                 className="button"
-                disabled={!base || busy || pending || !!status.projectId}
+                disabled={!base || busy || pending || !!status.projectId || !!statusError}
                 onClick={() => void action("open")}
               >
                 {pending ? (

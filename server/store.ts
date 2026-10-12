@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import Database from "better-sqlite3";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { DATA } from "./config";
+import { DATA, acquireDataOwnership } from "./config";
 import type {
   Project,
   Revision,
@@ -12,6 +12,7 @@ import type {
   Proposal,
 } from "../src/types";
 export const storeChanges = new EventEmitter();
+acquireDataOwnership();
 export const db = new Database(path.join(DATA, "index.sqlite"));
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");

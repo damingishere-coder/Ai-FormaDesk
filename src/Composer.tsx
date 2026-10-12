@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { api, uploadAttachment } from "./api";
+import { useModalFocus } from "./modalFocus";
 import type { Attachment, Job, Proposal, Snapshot } from "./types";
 
 type DraftImage = {
@@ -155,6 +156,8 @@ export function Composer({
   const [lightbox, setLightbox] = useState<string | null>(null),
     [newReply, setNewReply] = useState(false),
     [dragOver, setDragOver] = useState(false);
+  const lightboxDialog = useRef<HTMLDivElement>(null);
+  useModalFocus(!!lightbox, lightboxDialog, () => setLightbox(null));
   const list = useRef<HTMLDivElement>(null),
     nearBottom = useRef(true),
     chooser = useRef<HTMLInputElement>(null);
@@ -700,8 +703,10 @@ export function Composer({
       {lightbox &&
         createPortal(
           <div
+            ref={lightboxDialog}
             className="image-lightbox"
             role="dialog"
+            aria-modal="true"
             aria-label="参考图片大图"
             onClick={() => setLightbox(null)}
           >

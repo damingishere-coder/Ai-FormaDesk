@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
-import { BLENDER, DATA, ROOT } from "./config";
+import { BLENDER, DATA, ROOT, acquireDataOwnership } from "./config";
 import { runProcess } from "./process";
 import { runBlender } from "./sandbox";
 import { codex } from "./codex";
@@ -14,6 +14,7 @@ export let environment: any = {
 };
 let checking: Promise<any> | null = null;
 export async function checkEnvironment() {
+  acquireDataOwnership();
   if (checking) return checking;
   checking = perform().finally(() => (checking = null));
   return checking;
