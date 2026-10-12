@@ -9,6 +9,8 @@ permissions:
 jobs:
   verify:
     runs-on: macos-15
+    env:
+      FORMA_BROWSER_CHANNEL: chromium
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,6 +21,9 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm test
-      - run: python3 tests/plugin-source-open.py
+      - run: npm run test:python
       - run: npm run build
+      - run: npx playwright install chromium
+      - run: npm run test:browser
+      - run: npm run test:browser:safety
       - run: npm audit --omit=dev --audit-level=high

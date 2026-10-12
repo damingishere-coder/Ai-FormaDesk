@@ -13,7 +13,7 @@ export default defineConfig({
   retries: 0,
   outputDir: "test-results/mock",
   use: {
-    channel: "chrome",
+    channel: process.env.FORMA_BROWSER_CHANNEL === "chromium" ? undefined : "chrome",
     baseURL,
     viewport: { width: 1536, height: 1024 },
     serviceWorkers: "block",
