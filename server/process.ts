@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 export function registerVisualProcess(pid: number, registry: string, cwd: string) {
   fs.mkdirSync(registry, { recursive: true });
   const record = path.join(registry, randomUUID() + ".json");
-  const started = execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim();
+  const started = execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", env: { ...process.env, LC_ALL: "C", TZ: "UTC" } }).trim();
   fs.writeFileSync(record, JSON.stringify({ pid, started, cwd, kind: "codex-visual" }), { mode: 0o600 });
   return () => fs.rmSync(record, { force: true });
 }
@@ -41,7 +41,7 @@ export function runProcess(
           started = execFileSync(
             "/bin/ps",
             ["-p", String(p.pid), "-o", "lstart="],
-            { encoding: "utf8" },
+            { encoding: "utf8", env: { ...process.env, LC_ALL: "C", TZ: "UTC" } },
           ).trim();
         } catch {}
         fs.writeFileSync(
@@ -104,7 +104,7 @@ export function reapInterruptedProcesses(registry: string) {
       const start = execFileSync(
         "/bin/ps",
         ["-p", String(v.pid), "-o", "lstart="],
-        { encoding: "utf8" },
+        { encoding: "utf8", env: { ...process.env, LC_ALL: "C", TZ: "UTC" } },
       ).trim();
       const command = execFileSync(
         "/bin/ps",

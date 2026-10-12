@@ -3,12 +3,14 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
-type Owner = { pid: number; started: string; token: string };
+const BIRTH_FORMAT = "ps-lstart-c-utc-v1";
+type Owner = { pid: number; started: string; token: string; birthFormat?: string };
 
 function birth(pid: number) {
   const value = execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
+    env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
   }).trim();
   if (!value) throw new Error("无法确认数据目录所有者的进程身份。");
   return value;
@@ -22,7 +24,8 @@ function readOwner(file: string): Owner {
     if (
       !Number.isSafeInteger(owner.pid) || owner.pid < 2 ||
       typeof owner.started !== "string" || !owner.started.trim() ||
-      typeof owner.token !== "string" || !owner.token
+      typeof owner.token !== "string" || !owner.token ||
+      (owner.birthFormat !== undefined && typeof owner.birthFormat !== "string")
     ) throw new Error("invalid owner");
     return owner;
   } catch (error) {
@@ -39,6 +42,9 @@ function isAlive(owner: Owner) {
     // EPERM and failed identity probes cannot establish that an owner is stale.
     throw new Error("无法确认数据目录所有者，已拒绝写入。");
   }
+  // Old records contain locale/timezone-dependent text. A live PID with an
+  // unknown format cannot safely establish PID reuse, so never reclaim it.
+  if (owner.birthFormat !== BIRTH_FORMAT) return true;
   return birth(owner.pid) === owner.started;
 }
 
@@ -50,6 +56,7 @@ export function lockDesktopData(dir: string) {
     pid: process.pid,
     started: birth(process.pid),
     token: randomUUID(),
+    birthFormat: BIRTH_FORMAT,
   };
   const temporary = path.join(dir, `.desktop-owner-${owner.token}.tmp`);
   // Publish a complete record atomically: another process must never mistake a

@@ -29,9 +29,9 @@ function childEnv(dir: string, port = 0) {
     ZAOWU_MCP_RUNTIME: path.join(dir, "not-installed-mcp"),
   };
 }
-function launch(dir: string, code: string, port = 0) {
+function launch(dir: string, code: string, port = 0, environment: NodeJS.ProcessEnv = {}) {
   const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], {
-    cwd, env: childEnv(dir, port), stdio: ["ignore", "pipe", "pipe", "ipc"],
+    cwd, env: { ...childEnv(dir, port), ...environment }, stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   children.push(child);
   let output = "";
@@ -82,11 +82,11 @@ afterEach(async () => {
 const storeUrl = new URL("../server/store.ts", import.meta.url).href;
 const configUrl = new URL("../server/config.ts", import.meta.url).href;
 const indexUrl = new URL("../server/index.ts", import.meta.url).href;
-function backend(dir: string, port = 0) {
+function backend(dir: string, port = 0, environment: NodeJS.ProcessEnv = {}) {
   // Wait for the complete startup module, including shutdown signal handlers.
-  return launch(dir, `await import(${JSON.stringify(indexUrl)}); process.send({ type: 'test-backend-ready' });`, port);
+  return launch(dir, `await import(${JSON.stringify(indexUrl)}); process.send({ type: 'test-backend-ready' });`, port, environment);
 }
-function liveOwner(dir: string) {
+function liveOwner(dir: string, environment: NodeJS.ProcessEnv = {}) {
   return launch(dir, `
     import fs from 'node:fs'; import path from 'node:path'; import net from 'node:net';
     import { spawn, execFileSync } from 'node:child_process';
@@ -113,10 +113,37 @@ function liveOwner(dir: string) {
     }
     process.on('message', message => { if (message.type === 'stop') stop(); });
     process.on('SIGTERM', stop);
-  `);
+  `, 0, environment);
 }
 
 describe("启动前的数据目录所有权", () => {
+  it.each([
+    { ownerLocale: "C", ownerTZ: "UTC", contenderLocale: "zh_CN.UTF-8", contenderTZ: "Asia/Shanghai" },
+    { ownerLocale: "fr_FR.UTF-8", ownerTZ: "America/Los_Angeles", contenderLocale: "C", contenderTZ: "UTC" },
+  ])("语言/时区变化 $ownerLocale/$ownerTZ → $contenderLocale/$contenderTZ 不会接管活 owner、不改 DB 或 worker", async scenario => {
+    const dir = root();
+    const owner = liveOwner(dir, { LC_ALL: scenario.ownerLocale, TZ: scenario.ownerTZ });
+    const first = await ready(owner);
+    const before = snapshot(dir);
+    const record = fs.readFileSync(path.join(dir, "runtime-processes/fixture.json"), "utf8");
+    const lock = fs.readFileSync(path.join(dir, ".desktop-owner.json"), "utf8");
+    const second = backend(dir, 0, { LC_ALL: scenario.contenderLocale, TZ: scenario.contenderTZ });
+    // A regression that steals ownership starts successfully. Stop that test
+    // instance so the failed assertion stays bounded and leaves no process.
+    const accepted = ready(second, "test-backend-ready").then(async () => {
+      second.child.kill("SIGTERM");
+      return second.closed;
+    }).catch(() => second.closed);
+    const result = await Promise.race([second.closed, accepted]);
+    expect(result.code).not.toBe(0);
+    expect(result.output).toMatch(/另一个工作台或维护脚本/);
+    expect(snapshot(dir)).toEqual(before);
+    expect(fs.readFileSync(path.join(dir, "runtime-processes/fixture.json"), "utf8")).toBe(record);
+    expect(fs.readFileSync(path.join(dir, ".desktop-owner.json"), "utf8")).toBe(lock);
+    expect(() => process.kill(first.workerPid, 0)).not.toThrow();
+    expect((await stop(owner)).code).toBe(0);
+  }, 20000);
+
   it.each(["same", "different"])("%s 端口的第二个真实后台不改 DB、不回收合法 worker", async mode => {
     const dir = root();
     const owner = liveOwner(dir);

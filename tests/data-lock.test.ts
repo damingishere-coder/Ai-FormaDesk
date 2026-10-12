@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lockDesktopData } from "../server/data-lock";
 
@@ -34,6 +34,7 @@ describe("DATA 所有权锁", () => {
     const release = lockDesktopData(dir);
     releases.push(release);
     expect(readOwner(dir).pid).toBe(process.pid);
+    expect(readOwner(dir).birthFormat).toBe("ps-lstart-c-utc-v1");
     expect(fs.statSync(ownerFile(dir)).mode & 0o777).toBe(0o600);
     expect(() => lockDesktopData(dir)).toThrow(/另一个/);
     release();
@@ -43,11 +44,31 @@ describe("DATA 所有权锁", () => {
 
   it("PID 相同但出生时间不同的旧锁可以恢复", () => {
     const dir = root();
-    fs.writeFileSync(ownerFile(dir), JSON.stringify({ pid: process.pid, started: "previous process", token: "stale" }));
+    fs.writeFileSync(ownerFile(dir), JSON.stringify({ pid: process.pid, started: "previous process", token: "stale", birthFormat: "ps-lstart-c-utc-v1" }));
     releases.push(lockDesktopData(dir));
     expect(readOwner(dir).token).not.toBe("stale");
     expect(readOwner(dir).started).not.toBe("previous process");
     expect(fs.readdirSync(dir)).toEqual([".desktop-owner.json"]);
+  });
+
+  it("legacy 活 PID 即使出生字符串不同也拒绝，不把语言/时区变化当作 PID 重用", () => {
+    const dir = root();
+    const legacy = JSON.stringify({ pid: process.pid, started: "旧语言与时区的出生信息", token: "legacy-alive" });
+    fs.writeFileSync(ownerFile(dir), legacy);
+    expect(() => lockDesktopData(dir)).toThrow(/另一个/);
+    expect(fs.readFileSync(ownerFile(dir), "utf8")).toBe(legacy);
+    expect(fs.readdirSync(dir)).toEqual([".desktop-owner.json"]);
+  });
+
+  it("legacy 所有者真实退出后可依据 ESRCH 恢复", () => {
+    const dir = root();
+    const exited = spawnSync(process.execPath, ["-e", ""], { stdio: "ignore" });
+    expect(exited.status).toBe(0);
+    expect(() => process.kill(exited.pid, 0)).toThrow();
+    fs.writeFileSync(ownerFile(dir), JSON.stringify({ pid: exited.pid, started: "legacy process", token: "legacy-dead" }));
+    releases.push(lockDesktopData(dir));
+    expect(readOwner(dir).pid).toBe(process.pid);
+    expect(readOwner(dir).birthFormat).toBe("ps-lstart-c-utc-v1");
   });
 
   it("释放函数不会删除已经替换为另一个所有者的锁", () => {
@@ -88,7 +109,7 @@ describe("DATA 所有权锁", () => {
 
   it("多个真实进程同时争用陈旧锁，只有一个成功且锁保持属于胜者", async () => {
     const dir = root();
-    fs.writeFileSync(ownerFile(dir), JSON.stringify({ pid: process.pid, started: "old instance", token: "stale" }));
+    fs.writeFileSync(ownerFile(dir), JSON.stringify({ pid: process.pid, started: "old instance", token: "stale", birthFormat: "ps-lstart-c-utc-v1" }));
     const module = new URL("../server/data-lock.ts", import.meta.url).href;
     const contenders = Array.from({ length: 6 }, () => {
       const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
