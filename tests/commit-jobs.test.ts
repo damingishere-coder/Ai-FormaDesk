@@ -10,6 +10,7 @@ const { db, put, get, uid, project, revision, list } = await import("../server/s
 const { enqueue, retryJob, artifactPath } = await import("../server/jobs");
 const { environment } = await import("../server/environment");
 const { codex } = await import("../server/codex");
+const { trashProject, purgeProject } = await import("../server/projects");
 const scene = { objects: [], stats: { objects: 0, vertices: 0, triangles: 0 }, units: "meters", coordinates: "blender-z-up" };
 function fixture() {
   environment.blender = environment.sandbox = environment.codex = { ok: true };
@@ -75,4 +76,57 @@ it("提交前验证失败仍标记失败并保留原版本", async () => {
   expect(project(pid).currentRevisionId).toBeNull();
   expect(list("revision", pid)).toHaveLength(0);
   expect(list<any>("job", pid).filter(j => j.type === "preview")).toHaveLength(0);
+});
+
+it("复制中 ENOSPC 回滚索引并只清理本次目录，旧模型与其他作品不受影响", async () => {
+  const pid = fixture(), other = fixture(), base = uid();
+  const original = path.join(root, "original.blend");
+  fs.writeFileSync(original, "BLENDER-original");
+  const { artifact } = await import("../server/jobs");
+  const blend = artifact(original, pid, "original.blend", "application/x-blender");
+  put("revision", { id: base, projectId: pid, parentId: null, scene, artifacts: { blend } });
+  put("project", { ...project(pid), currentRevisionId: base });
+  const unrelated = path.join(root, "revisions", uid());
+  fs.mkdirSync(unrelated, { recursive: true });
+  fs.writeFileSync(path.join(unrelated, "keep"), "unrelated");
+  const before = fs.readdirSync(path.join(root, "revisions")).sort();
+  vi.spyOn(codex, "generate").mockResolvedValue({ python: "# fixture", summary: "fixture" });
+  run.mockImplementation(async (dir: string) => output(dir, false));
+  const copy = fs.copyFileSync;
+  vi.spyOn(fs, "copyFileSync").mockImplementation((src, dest, mode) => {
+    if (String(dest).includes(path.join(root, "revisions")) && String(dest).endsWith("scene.json"))
+      throw Object.assign(new Error("simulated ENOSPC"), { code: "ENOSPC" });
+    return copy(src, dest, mode);
+  });
+  const job = enqueue(pid, base, "generate", { prompt: "fixture", attachmentIds: [] });
+  const failed = await terminal(job.id);
+  expect(failed.status).toBe("failed");
+  expect(failed.resultRevisionId).toBeNull();
+  expect(project(pid).currentRevisionId).toBe(base);
+  expect(list("revision", pid)).toHaveLength(1);
+  expect(fs.readdirSync(path.join(root, "revisions")).sort()).toEqual(before);
+  expect(fs.readFileSync(original, "utf8")).toBe("BLENDER-original");
+  trashProject(pid); purgeProject(pid);
+  expect(fs.readFileSync(path.join(unrelated, "keep"), "utf8")).toBe("unrelated");
+  expect(project(other).currentRevisionId).toBeNull();
+});
+
+it("最后的 SQLite 写入失败也补偿文件和结果指针，不留下虚假新版本", async () => {
+  const pid = fixture();
+  const before = fs.existsSync(path.join(root, "revisions")) ? fs.readdirSync(path.join(root, "revisions")) : [];
+  vi.spyOn(codex, "generate").mockResolvedValue({ python: "# fixture", summary: "fixture" });
+  run.mockImplementation(async (dir: string) => output(dir, false));
+  db.exec(`CREATE TEMP TRIGGER reject_completed_job BEFORE INSERT ON documents
+    WHEN NEW.kind='job' AND json_extract(NEW.body,'$.status')='succeeded'
+    BEGIN SELECT RAISE(ABORT,'simulated final DB write failure'); END;`);
+  try {
+    const job = enqueue(pid, null, "generate", { prompt: "fixture", attachmentIds: [] });
+    const failed = await terminal(job.id);
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toContain("DB write failure");
+    expect(failed.resultRevisionId).toBeNull();
+    expect(project(pid).currentRevisionId).toBeNull();
+    expect(list("revision", pid)).toHaveLength(0);
+    expect(fs.readdirSync(path.join(root, "revisions"))).toEqual(before);
+  } finally { db.exec("DROP TRIGGER reject_completed_job"); }
 });

@@ -13,6 +13,7 @@ import { attachmentPath, validateAttachments } from "./attachments";
 import { runVisualPipeline } from "./visual-pipeline";
 import { archiveVisual } from "./visual-archive";
 import { optimizePreview } from "./preview-optimize";
+import { beginRevisionFiles, abortRevisionFiles, completeRevisionFiles, type RevisionFiles } from "./revision-files";
 import {
   db,
   put,
@@ -336,6 +337,7 @@ async function perform(
   }
   let dir = "";
   let committedRevisionId: string | null = null;
+  let pendingFiles: RevisionFiles | undefined;
   try {
     if (signal.aborted) throw new Error("任务已取消");
     update(j, {
@@ -578,8 +580,8 @@ async function perform(
     // Host copies verified output out of the writable job sandbox into immutable revision storage.
     update(j, { stage: "保存作品", error: null });
     const rid = uid();
-    const out = path.join(DATA, "revisions", rid);
-    fs.mkdirSync(out, { recursive: true });
+    pendingFiles = beginRevisionFiles(rid, p.id, j.id);
+    const out = pendingFiles.dir;
     const artifacts: any = {};
     const previewReport = path.join(dir, "preview.json");
     const needsDetail = fs.existsSync(previewReport) && !JSON.parse(fs.readFileSync(previewReport, "utf8")).complete;
@@ -635,6 +637,10 @@ async function perform(
       if (["generate", "blender-edit"].includes(j.type)) addMessage(p.id, "assistant", summary);
     })();
     committedRevisionId = rid;
+    try { completeRevisionFiles(pendingFiles); }
+    catch (markerError) {
+      console.error("模型已保存，提交标记未清理", { jobId: j.id, revisionId: rid, code: (markerError as NodeJS.ErrnoException).code || "MARKER_CLEANUP_FAILED" });
+    }
     if (needsDetail && !signal.aborted) {
       schedulePreview(p.id, rid, j.title);
     }
@@ -646,10 +652,18 @@ async function perform(
       console.error("模型已保存，后处理未完成", { jobId: j.id, projectId: p.id, revisionId: committedRevisionId, code: (e as NodeJS.ErrnoException).code || "POST_COMMIT_FAILED" });
       return;
     }
+    if (pendingFiles) {
+      try { abortRevisionFiles(pendingFiles); }
+      catch (cleanupError) {
+        // Keep a diagnostic marker rather than deleting a directory we cannot own.
+        console.error("失败提交目录未清理", { jobId: j.id, revisionId: pendingFiles.id, code: (cleanupError as NodeJS.ErrnoException).code || "CLEANUP_FAILED" });
+      }
+    }
     update(j, {
       status: signal.aborted ? "cancelled" : "failed",
       stage: signal.aborted ? "已取消" : "失败",
       error: (e as Error).message || "执行失败",
+      resultRevisionId: null,
     });
     if (j.type === "generate")
       addMessage(p.id, "error", j.error!, { jobId: j.id });
