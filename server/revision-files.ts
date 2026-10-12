@@ -65,7 +65,7 @@ export function revisionResidue(committed: ReadonlySet<string>, activeJobs: Read
       if (fs.realpathSync(file) !== file || fs.statSync(file).size > 4096) throw new Error("invalid marker");
       const marker = JSON.parse(fs.readFileSync(file, "utf8")) as Marker;
       if (marker.version !== 1 || marker.revisionId !== entry.name || !uuid.test(marker.projectId) || !uuid.test(marker.jobId)) throw new Error("invalid marker");
-      return [{ revisionId: entry.name, projectId: marker.projectId, jobId: marker.jobId, state: committed.has(entry.name) ? "committed-marker" : activeJobs.has(marker.jobId) ? "in-progress" : "interrupted" }];
+      return [{ revisionId: entry.name, projectId: marker.projectId, jobId: marker.jobId, state: committed.has(entry.name) ? "committed-marker" : activeJobs.has(marker.jobId) ? "active-record" : "interrupted" }];
     } catch {
       return [{ revisionId: entry.name, state: "invalid-marker" }];
     }

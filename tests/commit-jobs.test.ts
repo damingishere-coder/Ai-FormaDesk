@@ -7,7 +7,7 @@ vi.mock("../server/sandbox", () => ({ runBlender: run }));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "forma-commit-jobs-"));
 process.env.ZAOWU_DATA_DIR = root;
 const { db, put, get, uid, project, revision, list } = await import("../server/store");
-const { enqueue, retryJob, artifactPath } = await import("../server/jobs");
+const { enqueue, retryJob, artifactPath, jobEvents } = await import("../server/jobs");
 const { environment } = await import("../server/environment");
 const { codex } = await import("../server/codex");
 const { trashProject, purgeProject } = await import("../server/projects");
@@ -129,4 +129,33 @@ it("最后的 SQLite 写入失败也补偿文件和结果指针，不留下虚�
     expect(list("revision", pid)).toHaveLength(0);
     expect(fs.readdirSync(path.join(root, "revisions"))).toEqual(before);
   } finally { db.exec("DROP TRIGGER reject_completed_job"); }
+});
+
+it("成功 Job 写入后的消息失败，不会提前发送成功或失去基础模型恢复入口", async () => {
+  const pid = fixture();
+  const before = fs.readdirSync(path.join(root, "revisions")).sort();
+  vi.spyOn(codex, "generate").mockResolvedValue({ python: "# fixture", summary: "fixture" });
+  run.mockImplementation(async (dir: string) => output(dir, false));
+  db.exec(`CREATE TEMP TRIGGER reject_completed_message BEFORE INSERT ON documents
+    WHEN NEW.kind='message' AND json_extract(NEW.body,'$.role')='assistant'
+    BEGIN SELECT RAISE(ABORT,'simulated message write failure'); END;`);
+  const job = enqueue(pid, null, "generate", { prompt: "fixture", attachmentIds: [] });
+  const events: any[] = [];
+  const record = (event: any) => events.push(structuredClone(event));
+  jobEvents.on(job.id, record);
+  try {
+    const failed = await terminal(job.id);
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toContain("message write failure");
+    expect(events.some(e => e.status === "succeeded" || e.resultRevisionId)).toBe(false);
+    expect(events.at(-1)?.status).toBe("failed");
+    expect(project(pid).currentRevisionId).toBeNull();
+    expect(list("revision", pid)).toHaveLength(0);
+    expect(fs.readdirSync(path.join(root, "revisions")).sort()).toEqual(before);
+    expect(failed.recoverablePreview).toBe(true);
+    expect(fs.readFileSync(artifactPath(failed.savedBlendArtifactId), "utf8")).toBe("BLENDER-fixture");
+  } finally {
+    jobEvents.off(job.id, record);
+    db.exec("DROP TRIGGER reject_completed_message");
+  }
 });

@@ -13,7 +13,7 @@ it("崩溃遗留可只读区分活动、已提交和中断，不删除任何文�
   const files = beginRevisionFiles(randomUUID(), randomUUID(), randomUUID());
   const marker = JSON.parse(fs.readFileSync(path.join(files.dir, ".commit-pending.json"), "utf8"));
   const before = fs.readFileSync(path.join(files.dir, ".commit-pending.json"), "utf8");
-  expect(revisionResidue(new Set(), new Set([marker.jobId]))).toContainEqual(expect.objectContaining({ revisionId: files.id, state: "in-progress" }));
+  expect(revisionResidue(new Set(), new Set([marker.jobId]))).toContainEqual(expect.objectContaining({ revisionId: files.id, state: "active-record" }));
   expect(revisionResidue(new Set([files.id]), new Set())).toContainEqual(expect.objectContaining({ revisionId: files.id, state: "committed-marker" }));
   expect(revisionResidue(new Set(), new Set())).toContainEqual(expect.objectContaining({ revisionId: files.id, state: "interrupted" }));
   expect(fs.readFileSync(path.join(files.dir, ".commit-pending.json"), "utf8")).toBe(before);

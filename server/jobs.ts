@@ -11,10 +11,9 @@ import { assertExecution, environment } from "./environment";
 import { codex } from "./codex";
 import { attachmentPath, validateAttachments } from "./attachments";
 import { runVisualPipeline } from "./visual-pipeline";
-import { archiveVisual } from "./visual-archive";
+import { commitRevision } from "./revision-commit";
 import { artifact, artifactPath } from "./artifacts";
 import { optimizePreview } from "./preview-optimize";
-import { beginRevisionFiles, abortRevisionFiles, completeRevisionFiles, type RevisionFiles } from "./revision-files";
 import {
   db,
   put,
@@ -31,7 +30,6 @@ import {
 import {
   sceneSchema,
   type Job,
-  type Revision,
   type Project,
   type Proposal,
   type Message,
@@ -42,8 +40,8 @@ const controllers = new Map<string, AbortController>();
 const queuedPayloads = new Map<string, any>();
 let queue = Promise.resolve();
 export { artifact, artifactPath, type Artifact } from "./artifacts";
-function update(j: Job, values: Partial<Job>) {
-  Object.assign(j, values, { updatedAt: now() });
+function changedJob(current: Job, values: Partial<Job>) {
+  const j = Object.assign(structuredClone(current), values, { updatedAt: now() });
   if (values.stage) {
     if (values.message === undefined) j.message = "";
     const previous = j.events?.at(-1);
@@ -62,7 +60,12 @@ function update(j: Job, values: Partial<Job>) {
     ];
     if (j.type === "generate") j.estimate = estimateJob(j, list<Job>("job"));
   }
-  put("job", j);
+  return j;
+}
+function update(j: Job, values: Partial<Job>) {
+  const next = changedJob(j, values);
+  put("job", next);
+  Object.assign(j, next);
   jobEvents.emit(j.id, j);
 }
 export function assertBase(pid: string, base: string | null) {
@@ -311,7 +314,6 @@ async function perform(
   }
   let dir = "";
   let committedRevisionId: string | null = null;
-  let pendingFiles: RevisionFiles | undefined;
   try {
     if (signal.aborted) throw new Error("任务已取消");
     update(j, {
@@ -553,68 +555,20 @@ async function perform(
       throw new Error("版本已变化，任务结果未覆盖当前项目");
     // Host copies verified output out of the writable job sandbox into immutable revision storage.
     update(j, { stage: "保存作品", error: null });
-    const rid = uid();
-    pendingFiles = beginRevisionFiles(rid, p.id, j.id);
-    const out = pendingFiles.dir;
-    const artifacts: any = {};
-    const previewReport = path.join(dir, "preview.json");
-    const needsDetail = fs.existsSync(previewReport) && !JSON.parse(fs.readFileSync(previewReport, "utf8")).complete;
-    const files = [
-      ["blend", "scene.blend", "application/x-blender"],
-      ["glb", "scene.glb", "model/gltf-binary"],
-      ["manifest", "scene.json", "application/json"],
-      ["script", "generated.py", "text/x-python"],
-      ["log", "execution.log", "text/plain"],
-    ];
-    db.transaction(() => {
-      for (const [key, name, mime] of files) {
-        const f = path.join(out, name);
-        fs.copyFileSync(path.join(dir, name), f);
-        fs.chmodSync(f, 0o400);
-        artifacts[key] = artifact(f, p.id, `Ai-FormaDesk-${rid}-${name}`, mime);
-      }
-      if (fs.existsSync(path.join(dir, "textures"))) fs.cpSync(path.join(dir, "textures"), path.join(out, "textures"), { recursive: true });
-      const visual = j.visual ? archiveVisual(j.visual, out, artifactPath, (f, label, mime) => artifact(f, p.id, label, mime)) : undefined;
-      const r: Revision = {
-        preview: { status: needsDetail ? "basic" : "ready" },
-        visual,
-        id: rid,
-        projectId: p.id,
-        parentId: j.baseRevisionId,
-        source: j.type,
-        label: j.type === "generate" ? payload.prompt : summary,
-        createdAt: now(),
-        scene: scene!,
-        artifacts,
-      };
-      put("revision", r);
-      invalidateProposals(p.id);
-      put("project", {
-        ...project(p.id),
-        currentRevisionId: rid,
-        redo: [],
-        updatedAt: now(),
-      });
-      if (payload.proposalId)
-        put("proposal", {
-          ...get<Proposal>("proposal", payload.proposalId)!,
-          status: "succeeded",
-        });
-
-      update(j, {
-        status: "succeeded",
-        stage: "完成",
-        resultRevisionId: rid,
-        recoverablePreview: false,
-        message: summary,
-      });
-      if (["generate", "blender-edit"].includes(j.type)) addMessage(p.id, "assistant", summary);
-    })();
+    const saved = commitRevision({
+      job: j, dir, scene, signal, summary,
+      label: j.type === "generate" ? payload.prompt : summary,
+      proposalId: payload.proposalId,
+      completedJob: rid => changedJob(j, {
+        status: "succeeded", stage: "完成", resultRevisionId: rid,
+        recoverablePreview: false, message: summary,
+      }),
+    });
+    const rid = saved.revision.id;
     committedRevisionId = rid;
-    try { completeRevisionFiles(pendingFiles); }
-    catch (markerError) {
-      console.error("模型已保存，提交标记未清理", { jobId: j.id, revisionId: rid, code: (markerError as NodeJS.ErrnoException).code || "MARKER_CLEANUP_FAILED" });
-    }
+    Object.assign(j, saved.job);
+    jobEvents.emit(j.id, j);
+    const needsDetail = saved.needsDetail;
     if (needsDetail && !signal.aborted) {
       schedulePreview(p.id, rid, j.title);
     }
@@ -625,13 +579,6 @@ async function perform(
       // Core records and files have committed. Never rewrite that result as failed.
       console.error("模型已保存，后处理未完成", { jobId: j.id, projectId: p.id, revisionId: committedRevisionId, code: (e as NodeJS.ErrnoException).code || "POST_COMMIT_FAILED" });
       return;
-    }
-    if (pendingFiles) {
-      try { abortRevisionFiles(pendingFiles); }
-      catch (cleanupError) {
-        // Keep a diagnostic marker rather than deleting a directory we cannot own.
-        console.error("失败提交目录未清理", { jobId: j.id, revisionId: pendingFiles.id, code: (cleanupError as NodeJS.ErrnoException).code || "CLEANUP_FAILED" });
-      }
     }
     update(j, {
       status: signal.aborted ? "cancelled" : "failed",
