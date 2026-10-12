@@ -4,7 +4,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { BLENDER } from "./config";
 import { get, list, project, revision, activeJob, put } from "./store";
-import { artifactPath, type Artifact } from "./jobs";
+import { artifactPath, type Artifact } from "./artifacts";
 import type { ProjectFile, ProjectFileKind } from "../src/libraryTypes";
 import type { Render, VideoRecord } from "../src/types";
 export type LinkedFile = {

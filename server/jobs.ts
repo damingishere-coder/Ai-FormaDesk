@@ -12,6 +12,7 @@ import { codex } from "./codex";
 import { attachmentPath, validateAttachments } from "./attachments";
 import { runVisualPipeline } from "./visual-pipeline";
 import { archiveVisual } from "./visual-archive";
+import { artifact, artifactPath } from "./artifacts";
 import { optimizePreview } from "./preview-optimize";
 import { beginRevisionFiles, abortRevisionFiles, completeRevisionFiles, type RevisionFiles } from "./revision-files";
 import {
@@ -40,34 +41,7 @@ jobEvents.setMaxListeners(100);
 const controllers = new Map<string, AbortController>();
 const queuedPayloads = new Map<string, any>();
 let queue = Promise.resolve();
-export type Artifact = {
-  id: string;
-  projectId: string;
-  path: string;
-  name: string;
-  mime: string;
-};
-export function artifact(
-  file: string,
-  pid: string,
-  name: string,
-  mime: string,
-) {
-  const id = uid();
-  put("artifact", { id, projectId: pid, path: file, name, mime });
-  return id;
-}
-export function artifactPath(id: string) {
-  const a = get<Artifact>("artifact", id);
-  if (!a) throw Object.assign(new Error("文件不存在"), { statusCode: 404 });
-  const real = fs.realpathSync(a.path);
-  if (
-    !real.startsWith(fs.realpathSync(DATA) + path.sep) ||
-    !fs.statSync(real).isFile()
-  )
-    throw new Error("文件不在工作台目录中");
-  return real;
-}
+export { artifact, artifactPath, type Artifact } from "./artifacts";
 function update(j: Job, values: Partial<Job>) {
   Object.assign(j, values, { updatedAt: now() });
   if (values.stage) {

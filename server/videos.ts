@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DATA, ROOT } from "./config";
 import { get, put, uid, now, project, revision, activeJob } from "./store";
-import { artifact, artifactPath } from "./jobs";
+import { artifact, artifactPath } from "./artifacts";
 import { runBlender } from "./sandbox";
 import {
   trajectorySchema,

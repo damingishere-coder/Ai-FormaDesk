@@ -8,7 +8,7 @@ import { DATA, ROOT, PORT } from "./config";
 import { projectLibrary } from "./projects";
 import { get, storeChanges } from "./store";
 import { projectFiles } from "./project-files";
-import { artifactPath, type Artifact } from "./jobs";
+import { artifactPath, type Artifact } from "./artifacts";
 let activePort = PORT;
 export function writeLibraryCache() {
   const dir = path.join(DATA, "project-library");
