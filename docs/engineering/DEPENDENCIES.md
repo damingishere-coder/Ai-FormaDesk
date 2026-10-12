@@ -5,7 +5,7 @@
 - 官方 `npm audit --omit=dev`：**7 → 0**，最后一次 exit 0。
 - 完整 `npm audit`：**20 → 11**，最后一次 exit 1。剩余 **2 critical + 9 moderate，0 high**，全部标为开发依赖链；未把残余风险改名为“无问题”。
 - 依赖源码修改仅 `package.json` 的 3 个 dependencies 字段与 `package-lock.json`。本轮新增 scripts、devDependencies 与固定 Electron/build 工具版本保留；本轮同步 version 1.1.1 已确认。
-- 没有 force、全量 audit fix、overrides、跨主版本工具迁移，也没有提交/推送/部署。
+- 没有 force、全量 audit fix、overrides 或跨主版本工具迁移。源码与发行状态见 [工程记录](STABILITY.md)。
 
 ## 官方 registry 确认与实际安装
 
@@ -67,4 +67,3 @@ npm update http-cache-semantics source-map-js --no-audit --no-fund --registry=ht
 - 额外 native 检查：从合成 PNG 实際编码并全解码 PNG/JPEG/WebP，尺寸/数据有效；坏图输入被拒绝。SQLite `:memory:` 创建/插入/查询成功，全程没有生产数据。
 - `npm ls`：无错误，确认 direct、transitive 与固定工具版本。package/lock/root lock version 均为 本轮的 **1.1.1**；scripts/devFields 与 mutation 前快照一致。
 - 前端 P1.3/P2.3/键盘新专项 19/19 + API 11/11 已单独交付，完整前端、构建、桌面包与无 AI Blender 回归的最终状态见 [工程记录](STABILITY.md)。本文件只记录依赖补丁专项，不代替发行验收。
-

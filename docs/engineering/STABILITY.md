@@ -62,7 +62,7 @@ flowchart LR
 
 - 本轮不改 Schema、作品目录路径或已有对象 ID，不自动重发写请求、不重放中断的 AI 任务。
 - `ZAOWU_DATA_DIR=/绝对/作品目录 npm run check:revision-files` 只读取索引和标记，可以在后台持锁时执行；输出不包含模型内容或凭据。先备份、核对业务记录与 owner/worker，再决定任何后续清理。
-- 普通 owner 被 SIGKILL 后可在重启回收。若“陈旧锁回收”自身在极短窗口被 SIGKILL，恢复守卫会保留，后续启动安全拒绝写入。确认工作台和维护进程均退出、owner PID 与出生时间无合法 writer 后，才处理空 `.desktop-owner-recovery`；坏 owner JSON 同理，不能直接当作旧锁删除。
+- 进程身份统一使用 C/UTC，并在新 owner 记录标明格式。旧/未知格式活 PID 一律拒绝，不把语言、时区差异当作 PID 重用；只有确认 PID 已不存在才自动回收。旧 worker 登记无法与统一出生时间匹配时不自动终止，应先正常退出旧应用再升级。普通 owner 被 SIGKILL 后可在重启回收。若“陈旧锁回收”自身在极短窗口被 SIGKILL，恢复守卫会保留，后续启动安全拒绝写入。确认工作台和维护进程均退出、owner PID 与出生时间无合法 writer 后，才处理空 `.desktop-owner-recovery`；坏 owner JSON 同理，不能直接当作旧锁删除。
 - 每组使用独立提交，回退源码/依赖锁即可撤回相应行为；撤回不删除本轮或既有作品。提交标记仅是额外文件，旧版本不读取它。桌面安装沿用现有脚本，保留旧 app 与 Dock 备份，作品和设置原位保留。
 - 默认 mock suite 不启动后台、不代理到日常端口、不允许未 mock 的 API 或外部请求。真实浏览器/历史 CLI 验收必须明确 opt-in，并在系统临时 `formadesk-live-*` DATA 与独立 URL 上执行；真实 AI 还需单独 opt-in。
 
@@ -71,16 +71,16 @@ flowchart LR
 | 轮次 | 实现提交 | 实际证据 |
 | --- | --- | --- |
 | P1.0 | `7b93123` | 正式 main/发行来源核对；243 个旧副本文件归档与 SHA256 清单；独立 npm ci/build。 |
-| P1.1 | `10f7b99` | data-lock 10 项、startup 12 项；同/异端口第二实例拒绝，6 进程陈旧锁竞争仅一个胜者；SIGKILL 恢复及 ready 后 SIGTERM。 |
+| P1.1 | `10f7b99`、`ff32866` | data-lock 12 项、startup 14 项、process birth 3 项；同/异端口第二实例拒绝，6 进程陈旧锁竞争仅一个胜者；SIGKILL 恢复及 ready 后 SIGTERM；跨语言/时区仍拒绝活 owner。 |
 | P1.2 | `3d01bfe` | 保存后排队失败仍成功，预览可继续、方案不降级；5 项 commit 与 3 项 preview 回归。 |
-| P1.3 / P2.3 / 键盘 | `6a4b9d1` | 19 项前端边界、11 项 API 回归；迟到响应、未知写结果核对、失效健康/状态与实际模态焦点。 |
-| P1.4 | `bc6a5fa`、`34ea6a3`、`dbffda2`、`9914e3e` | 默认 safe browser 46/46；原 5 条失败恢复；20 旧脚本 54 次实际子进程拒绝、6 项 guard；另 5 项浏览器负向护栏按预期拒绝。 |
+| P1.3 / P2.3 / 键盘 | `6a4b9d1`、`145aceb` | 21 项前端边界、11 项 API 回归；迟到响应、未知写结果核对、失效健康/状态与实际模态焦点。 |
+| P1.4 | `bc6a5fa`、`34ea6a3`、`dbffda2`、`9914e3e` | 默认 safe browser 48/48；原 5 条失败恢复；20 旧脚本 54 次实际子进程拒绝、6 项 guard；另 5 项浏览器负向护栏按预期拒绝。 |
 | P2.1 | `53ad853` | ENOSPC、SQLite rollback、真实 SIGKILL 遗留；4 项文件归属/残留，旧成果与其他作品保留。 |
 | P2.2 | `b72a3a8` | Fastify 5.12.5 / MCP 1.31.0 / sharp 0.35.5；生产 npm audit 7→0；原生图片/SQLite、上传坏文件与协议回归；完整开发链仍 11 项需另轮工具升级。 |
 | P2.3a / 子树 | `6dfadc3` | MCP 19 项；Python 子树 11 项（含1200/1500层及超限/环/重复节点）；实际 Blender helper 导入/顺序/ID。 |
 | P2.4 | `310b4c5`、`7126fae` | artifact 独立与无 jobs↔videos 循环；成功后消息写入失败不广播成功；23 项版本/取消/恢复/提交定向回归及真实新旧 .blend。 |
 
-整体验证：`npm test` **25 文件 / 131 项通过**；`npm run test:python` **3 插件 + 11 子树通过**；TypeScript/Vite 构建与独立 `.app` 打包通过；保留主包 >500KB 提示，没有为压分或体积提示改业务。
+整体验证：`npm test` **26 文件 / 138 项通过**；`npm run test:python` **3 插件 + 11 子树通过**；TypeScript/Vite 构建与独立 `.app` 打包通过；保留主包 >500KB 提示，没有为压分或体积提示改业务。
 
 真实 Blender smoke：AI 调用 **0**，两类沙箱读/写/本机及外网阻断、凭据隔离；固定立方体重命名后新 revision/parent/对象 ID/artifact 归属正确，旧模型 SHA 不变；新 .blend 再打开正确、0400 核心文件与无提交残留通过。
 
