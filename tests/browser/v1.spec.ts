@@ -2,11 +2,14 @@ import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import type { Snapshot, SceneObject } from "../../src/types";
-const evidence = path.resolve("data/acceptance");
+import { liveEnvironment } from "./live-environment";
+const live = liveEnvironment();
+const evidence = path.join(live.dataDir, "browser-evidence/acceptance");
 fs.mkdirSync(evidence, { recursive: true });
 test("真实 Codex → Blender → 网页编辑 → 继续对话 → 版本恢复 → 渲染导出", async ({
   page,
 }) => {
+  test.skip(process.env.FORMA_REAL_AI !== "1", "真实 AI 生成还需显式设置 FORMA_REAL_AI=1");
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");

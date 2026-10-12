@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 const day = "2026-09-09T00:00:00Z";
 function fixture() {
   return Array.from({ length: 8 }, (_, i) => ({
@@ -128,7 +128,7 @@ async function setup(page: any) {
         });
       }
     }
-    return route.fulfill({ json: {} });
+    return route.fallback();
   });
   await page.goto("/");
   await expect(

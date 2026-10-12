@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import type { Snapshot, VideoRecord } from "../../src/types";
 
 test("统一导出保留各类型设置，模型下载与真实视频录制均在同页完成", async ({

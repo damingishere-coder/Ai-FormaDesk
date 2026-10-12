@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 for (const width of [1280, 768, 390]) {
   test(`作品卡片用量、未知值与窄屏布局 ${width}px`, async ({ page }) => {
@@ -16,9 +16,9 @@ for (const width of [1280, 768, 390]) {
         threadId: null, currentRevisionId: null, redo: [],
         createdAt: "2026-09-09T00:00:00Z", tokenUsage,
       })) });
-      return route.fulfill({ json: {} });
+      return route.fallback();
     });
-    await page.goto(process.env.TOKEN_UI_BASE || "/");
+    await page.goto("/");
     const labels = page.locator(".home-project-tokens");
     await expect(labels).toHaveText(["12.5K tokens", "≥1.2M tokens", "Token 未统计", "0 tokens"]);
     await expect(labels.nth(1)).toHaveAttribute("title", /历史或部分调用记录不完整/);

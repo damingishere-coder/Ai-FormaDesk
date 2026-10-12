@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import type { Snapshot, VideoRecord } from "../../src/types";
 
 test("录制结果可逐层返回和直达工作台，失败重试保留视频", async ({
@@ -159,7 +159,7 @@ test("录制结果可逐层返回和直达工作台，失败重试保留视频",
     } else throw new Error(`Unexpected API request: ${url}`);
     await route.fulfill({ json });
   });
-  await page.goto(process.env.VIDEO_NAV_BASE || "/");
+  await page.goto("/");
   await page.getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true }).click();
   await page.getByRole("button", { name: "导出", exact: true }).click();
   await page.getByRole("tab", { name: "视频", exact: true }).click();

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import * as THREE from "three";
 import sharp from "sharp";
 
@@ -115,7 +115,7 @@ for (const failFirst of [false, true])
         cover = true;
         return route.fulfill({ json: { coverUrl: "/api/artifacts/cover" } });
       }
-      return route.fulfill({ json: {} });
+      return route.fallback();
     });
     await page.goto("/");
     await expect(page.locator(".home-project")).toHaveCount(1);
@@ -216,7 +216,7 @@ test("刷新封面串行重新取景，小模型与大模型占比一致，重�
       images.set(p.coverUrl, image);
       return route.fulfill({ json: { coverUrl: p.coverUrl } });
     }
-    return route.fulfill({ json: {} });
+    return route.fallback();
   });
   await page.goto("/");
   await expect(page.locator(".home-project")).toHaveCount(2);

@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 
 test("细节失败保留基础预览说明，重试刷新失败不产生未处理错误", async ({ page }) => {
   const errors: string[] = [];
@@ -10,12 +10,13 @@ test("细节失败保留基础预览说明，重试刷新失败不产生未处�
   await page.addInitScript(id => localStorage.setItem("forma-project", id), pid);
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url()).pathname;
-    let json: any = {};
+    let json: unknown;
     if (url === "/api/session") json = { token: "test-session" };
     else if (url === "/api/health") json = { ok: true, codex: { ok: true } };
     else if (url === "/api/blender/status") json = { sessions: [] };
     else if (url === "/api/projects") json = [project];
-    else if (url.endsWith("/scene")) {
+    else if (url === `/api/projects/${pid}/opened`) json = project;
+    else if (url === `/api/projects/${pid}/scene`) {
       if (retry) return route.fulfill({ status: 500, json: { error: "测试刷新失败" } });
       json = { project, revision: { id: revisionId, preview: { status: "failed" }, artifacts: {} }, scene: { objects: [], stats: { objects: 0, vertices: 0, triangles: 0 }, units: "meters", coordinates: "blender-z-up" }, previewUrl: null, activeJob: null, jobs: [job], messages: [], proposals: [], render: null };
     } else if (url.endsWith("/retry")) {
@@ -25,9 +26,11 @@ test("细节失败保留基础预览说明，重试刷新失败不产生未处�
       return route.fulfill({ status: 202, json: job });
     } else if (url.endsWith("/events")) return route.abort();
     else if (url === "/api/jobs/detail-retry") json = job;
+    else return route.fallback();
     await route.fulfill({ json });
   });
   await page.goto("/");
+  await page.getByRole("button", { name: `打开 ${project.name}`, exact: true }).click();
   const flow = page.getByLabel("建模流程");
   await expect(flow).toBeVisible();
   await expect(flow).toContainText("模型和基础预览已保留");
@@ -58,17 +61,20 @@ test("提交新任务后，晚到的旧预览事件不能覆盖新任务", async
   }, pid);
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url()).pathname;
-    let json: any = {};
+    let json: unknown;
     if (url === "/api/session") json = { token: "test" };
     else if (url === "/api/health") json = { ok: true, codex: { ok: true } };
     else if (url === "/api/blender/status") json = { sessions: [] };
     else if (url === "/api/projects") json = [project];
-    else if (url.endsWith("/scene")) json = { project, revision: { id: rid, preview: { status: "processing" }, artifacts: {} }, scene: { objects: [], stats: { objects: 0, vertices: 0, triangles: 0 }, units: "meters", coordinates: "blender-z-up" }, previewUrl: null, activeJob: current, jobs: [old, ...(current === next ? [next] : [])], messages: [], proposals: [], render: null };
-    else if (url.endsWith("/discuss")) { current = next; json = next; }
-    else if (url.includes("/api/jobs/")) json = current;
+    else if (url === `/api/projects/${pid}/opened`) json = project;
+    else if (url === `/api/projects/${pid}/scene`) json = { project, revision: { id: rid, preview: { status: "processing" }, artifacts: {} }, scene: { objects: [], stats: { objects: 0, vertices: 0, triangles: 0 }, units: "meters", coordinates: "blender-z-up" }, previewUrl: null, activeJob: current, jobs: [old, ...(current === next ? [next] : [])], messages: [], proposals: [], render: null };
+    else if (url === `/api/projects/${pid}/discuss`) { current = next; json = next; }
+    else if (url === `/api/jobs/${old.id}` || url === `/api/jobs/${next.id}`) json = current;
+    else return route.fallback();
     await route.fulfill({ json });
   });
   await page.goto("/");
+  await page.getByRole("button", { name: `打开 ${project.name}`, exact: true }).click();
   await expect(page.getByLabel("建模流程")).toBeVisible();
   await page.getByPlaceholder(/说说你的想法/).fill("先讨论车轮，不执行修改");
   await page.getByPlaceholder(/说说你的想法/).press("Enter");

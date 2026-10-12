@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import type { Snapshot } from "../../src/types";
 
 test("场景列表展开后避开工具栏，长列表滚动且工具仍可操作", async ({

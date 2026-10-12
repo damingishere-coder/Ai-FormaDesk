@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./fixtures";
 import fs from "node:fs";
 import path from "node:path";
 import type { Snapshot, Job } from "../../src/types";
@@ -77,19 +77,14 @@ test("作品保存三视图入口、放大图片、失败检查记录与重开",
       });
       return;
     }
-    const json =
-      url === "/api/session"
-        ? { token: "test" }
-        : url === "/api/health"
-          ? { ok: true, codex: { ok: true } }
-          : url === "/api/projects"
-            ? [snapshot.project]
-            : url.endsWith("/scene")
-              ? snapshot
-              : job;
-    await route.fulfill({ json });
+    if (url === "/api/projects") return route.fulfill({ json: [snapshot.project] });
+    if (url === `/api/projects/${id}/opened`) return route.fulfill({ json: snapshot.project });
+    if (url === `/api/projects/${id}/scene`) return route.fulfill({ json: snapshot });
+    if (url === `/api/jobs/${job.id}`) return route.fulfill({ json: job });
+    return route.fallback();
   });
   await page.goto("/");
+  await page.getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true }).click();
   await page.getByRole("button", { name: "参考与三视图", exact: true }).click();
   const dialog = page.getByRole("dialog", {
     name: "参考与三视图",
@@ -111,11 +106,12 @@ test("作品保存三视图入口、放大图片、失败检查记录与重开",
   await page.screenshot({ path: info.outputPath("references.png") });
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await page.reload();
+  await page.getByRole("button", { name: `打开 ${snapshot.project.name}`, exact: true }).click();
   await page.getByRole("button", { name: "参考与三视图", exact: true }).click();
   await expect(dialog.locator(".visual-image-grid img")).toHaveCount(4);
 });
 
-test("真实烘焙 GLB 可以在网页加载面光源和贴图", async ({ page }, info) => {
+test("真实烘焙 GLB 可以在网页加载面光源和贴图 @asset", async ({ page }, info) => {
   const root = path.resolve("data/visual-blender-proof/appearance");
   test.skip(
     !fs.existsSync(path.join(root, "scene.glb")),
@@ -177,7 +173,7 @@ test("真实烘焙 GLB 可以在网页加载面光源和贴图", async ({ page }
   await page.screenshot({ path: info.outputPath("baked-web.png") });
 });
 
-test("网页采用保存的 AgX 与曝光，降低曝光确实降低模型亮度", async ({
+test("网页采用保存的 AgX 与曝光，降低曝光确实降低模型亮度 @asset", async ({
   page,
 }, info) => {
   const file = path.resolve("data/threeview-live/metal/pipeline/pipeline.json");
