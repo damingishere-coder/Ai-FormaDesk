@@ -2,8 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-const root = path.resolve(import.meta.dirname, "..");
-const runtime = path.join(root, "data/blender-mcp-runtime");
+import { DATA, ROOT, acquireDataOwnership } from "../server/config";
+import { lockDesktopData } from "../server/data-lock";
+acquireDataOwnership();
+const root = ROOT;
+// Match BlenderBridge's shared runtime path, including explicit overrides.
+const runtime = path.resolve(process.env.ZAOWU_MCP_RUNTIME || path.join(root, "data/blender-mcp-runtime"));
+const runtimeParent = path.dirname(runtime);
+fs.mkdirSync(runtimeParent, { recursive: true });
+const runtimeData = fs.realpathSync(runtimeParent);
+if (runtimeData !== DATA && !runtimeData.startsWith(DATA + path.sep))
+  lockDesktopData(runtimeData);
 fs.mkdirSync(runtime, { recursive: true });
 const run = (
   command: string,

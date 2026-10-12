@@ -2,9 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { runBlender } from "../server/sandbox";
-import { ROOT } from "../server/config";
+import { ROOT, DATA, acquireDataOwnership } from "../server/config";
 import { sceneSchema } from "../src/types";
-const evidence = path.resolve("data/v2-evidence");
+acquireDataOwnership();
+const evidence = path.join(DATA, "v2-evidence");
 const s = JSON.parse(
   fs.readFileSync(path.join(evidence, "final-scene.json"), "utf8"),
 );

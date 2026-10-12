@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { DATA, ROOT } from "../server/config";
+import { DATA, ROOT, acquireDataOwnership } from "../server/config";
 import { runBlender } from "../server/sandbox";
 import { sceneSchema } from "../src/types";
+acquireDataOwnership();
 const evidence = path.join(DATA, "acceptance");
 const outputs: any[] = [];
 for (const name of ["edited-scene.json", "final-scene.json"]) {

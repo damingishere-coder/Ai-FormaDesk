@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { BLENDER, ROOT, DATA } from "./config";
+import { BLENDER, ROOT, DATA, acquireDataOwnership } from "./config";
 import { runProcess } from "./process";
 export function sandboxProfile(jobDir: string, rendering = false) {
   const cachePaths: string[] = [];
@@ -60,6 +60,7 @@ export function runBlender(
   timeout = 120000,
   rendering = false,
 ) {
+  acquireDataOwnership();
   const queued = blenderQueue.then(async () => {
     if (signal?.aborted) throw new Error("任务已取消");
     const profile = path.join(jobDir, "sandbox.sb");

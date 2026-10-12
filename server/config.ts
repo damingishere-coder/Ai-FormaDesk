@@ -8,7 +8,11 @@ const configuredData = path.resolve(
 );
 fs.mkdirSync(configuredData, { recursive: true, mode: 0o700 });
 export const DATA = fs.realpathSync(configuredData);
-if (process.env.ZAOWU_DESKTOP_TOKEN) lockDesktopData(DATA);
+let releaseData: (() => void) | undefined;
+/** Configuration reads are harmless; only real writers claim process ownership. */
+export function acquireDataOwnership() {
+  if (!releaseData) releaseData = lockDesktopData(DATA);
+}
 export const BLENDER =
   process.env.ZAOWU_BLENDER ||
   "/Applications/Blender 4.5 LTS.app/Contents/MacOS/Blender";
