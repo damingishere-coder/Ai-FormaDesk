@@ -57,22 +57,36 @@ export function captureCode(id: string, output: string) {
     `\nbpy.ops.wm.save_as_mainfile(filepath=${JSON.stringify(output)},check_existing=False,copy=True)\nprint('FORMA_RESULT:'+json.dumps({'saved':True}))`
   );
 }
-export function parseToolResult(result: any): any {
-  const text = (result.content || [])
-    .filter((v: any) => v.type === "text")
-    .map((v: any) => v.text)
+export function parseToolResult(result: unknown): any {
+  if (!result || typeof result !== "object")
+    throw new Error("Blender MCP 返回了无效响应");
+  const response = result as { isError?: unknown; content?: unknown };
+  const text = (Array.isArray(response.content) ? response.content : [])
+    .filter(
+      (v): v is { type: "text"; text: string } =>
+        !!v && v.type === "text" && typeof v.text === "string",
+    )
+    .map((v) => v.text)
     .join("\n");
+  // The MCP runtime wraps captured stdout with this prefix. Inspect complete
+  // lines outside the JSON payload, so user object names cannot become errors.
+  const lines = text.split(/\r?\n/).map((line) =>
+    line.trimStart().replace(/^Code executed successfully:\s*/, ""),
+  );
   if (
-    result.isError ||
-    /^Error|Error executing|Communication error|Rejected by safe mode/m.test(
-      text,
+    response.isError ||
+    lines.some((line) =>
+      /^(?:Error\b|Communication error\b|Rejected by safe mode\b|Code execution error\b|Unauthorized\b|Forbidden\b|Permission denied\b)/.test(
+        line,
+      ),
     )
   )
     throw new Error(text.slice(0, 1500) || "Blender MCP 调用失败");
-  const marker = text.indexOf("FORMA_RESULT:");
-  if (marker < 0) throw new Error("Blender MCP 没有返回实际执行结果");
-  const value = text.slice(marker + 13).split("\n")[0];
-  return JSON.parse(value);
+  const results = lines.filter((line) => line.startsWith("FORMA_RESULT:"));
+  if (!results.length) throw new Error("Blender MCP 没有返回实际执行结果");
+  if (results.length !== 1)
+    throw new Error("Blender MCP 返回了多个执行结果，无法确认本次结果");
+  return JSON.parse(results[0].slice("FORMA_RESULT:".length));
 }
 
 export function prepareCaptureCode(

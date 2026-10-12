@@ -5,6 +5,7 @@ import bpy, sys, json, os, uuid, math, hashlib
 from mathutils import Vector, Matrix
 sys.path.insert(0,os.path.dirname(__file__))
 from appearance import adjust_material,bake_portable,ensure_render_lighting
+from scene_tree import descendants,MAX_SCENE_OBJECTS
 args=sys.argv[sys.argv.index('--')+1:]
 mode, directory=args[0], args[1]
 def file(name): return os.path.join(directory,name)
@@ -37,11 +38,9 @@ def find(oid):
     obj=next((o for o in bpy.context.scene.objects if o.get('forma_id')==oid),None)
     if obj is None:raise ValueError('对象 ID 不存在: '+oid)
     return obj
-def descendants(obj):
-    return [obj]+[n for c in obj.children for n in descendants(c)]
 def normalize():
     scene=bpy.context.scene
-    if len(scene.objects)>1500:raise ValueError('V1 场景最多允许 1500 个对象')
+    if len(scene.objects)>MAX_SCENE_OBJECTS:raise ValueError('V1 场景最多允许 1500 个对象')
     seen=set()
     for obj in scene.objects:
         oid=identity(obj)
