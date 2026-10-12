@@ -27,7 +27,8 @@ import {
   Maximize,
   MessageSquare,
 } from "lucide-react";
-import { api } from "./api";
+import { api, ApiRequestError } from "./api";
+import { useModalFocus } from "./modalFocus";
 import { Viewport, type ViewportHandle } from "./Viewport";
 import { Inspector } from "./Inspector";
 import { Composer } from "./Composer";
@@ -77,6 +78,13 @@ export function App() {
   const [previewStatus,setPreviewStatus]=useState<'loading'|'ready'|'failed'>('loading');
   const jobRef = useRef<Job | null>(null);
   const loadSequence = useRef(0);
+  const submissionSequence = useRef(0);
+  const healthSequence = useRef(0);
+  const healthPolling = useRef(false);
+  const [healthError, setHealthError] = useState("");
+  const [healthStale, setHealthStale] = useState(false);
+  const appModal = useRef<HTMLElement>(null);
+  useModalFocus(["history", "health"].includes(panel) ? panel : false, appModal, () => setPanel(""));
   const setJob = useCallback((value: Job | null) => {
     jobRef.current = value;
     setJobState(value);
@@ -137,7 +145,31 @@ export function App() {
     currentPid = useRef(pid),
     submitLock = useRef(false);
   currentPid.current = pid;
-  const busy = submitting || (!!job && job.type !== "preview" && !terminal(job));
+  const busy = submitting || (!!job && job.projectId === pid && job.type !== "preview" && !terminal(job));
+  function isContext(expectedPid: string, expectedJobId?: string) {
+    return currentPid.current === expectedPid && jobRef.current?.id === expectedJobId;
+  }
+  function acceptJob(expectedPid: string, expectedJobId: string | undefined, value: Job) {
+    if (!isContext(expectedPid, expectedJobId) || value.projectId !== expectedPid) return false;
+    setJob(value);
+    return true;
+  }
+  async function refreshHealth(recheck = false) {
+    const sequence = ++healthSequence.current;
+    if (recheck) setHealth((value: any) => ({ ...value, checking: true }));
+    try {
+      const value = await api(recheck ? "/health/recheck" : "/health", recheck ? {} : undefined);
+      if (sequence !== healthSequence.current) return;
+      setHealth(value);
+      setHealthStale(false);
+      setHealthError("");
+    } catch (error) {
+      if (sequence !== healthSequence.current) return;
+      setHealth((value: any) => ({ ...value, checking: false }));
+      setHealthStale(true);
+      setHealthError("环境状态无法确认：" + (error as Error).message);
+    }
+  }
   const object = snapshot?.scene.objects.find((o) => o.id === selected);
   const base = snapshot?.project.currentRevisionId || null;
   useEffect(() => {
@@ -164,9 +196,8 @@ export function App() {
     let alive = true;
     void (async () => {
       try {
-        const [p, h] = await Promise.all([loadProjects(), api("/health")]);
+        const [p] = await Promise.all([loadProjects(), refreshHealth()]);
         if (!alive) return;
-        setHealth(h);
         if (
           !currentPid.current ||
           !p.some((x) => x.id === currentPid.current)
@@ -175,14 +206,21 @@ export function App() {
           setPanel("projects");
         }
       } catch (e) {
-        setError((e as Error).message);
+        if (alive) setError((e as Error).message);
       }
     })();
     return () => {
       alive = false;
+      healthSequence.current++;
     };
   }, []);
   useEffect(() => {
+    submissionSequence.current++;
+    submitLock.current = false;
+    setSubmitting(false);
+    setError("");
+    setNotice("");
+    setDisconnected(false);
     if (!pid) {
       setSnapshot(null);
       setJob(null);
@@ -204,14 +242,18 @@ export function App() {
     setChatUnread(false);
     setSettings(defaultRenderSettings);
     setReloadKey(0);
-    void load(pid).catch((e) => setError(e.message));
+    const expectedPid = pid;
+    void load(expectedPid).catch((e) => {
+      if (currentPid.current === expectedPid) setError(e.message);
+    });
   }, [pid, load]);
   useEffect(() => {
     if (health?.checking) {
-      const timer = setInterval(
-        () => void api("/health").then(setHealth),
-        1800,
-      );
+      const timer = setInterval(() => {
+        if (healthPolling.current) return;
+        healthPolling.current = true;
+        void refreshHealth().finally(() => { healthPolling.current = false; });
+      }, 1800);
       return () => clearInterval(timer);
     }
   }, [health?.checking]);
@@ -222,7 +264,7 @@ export function App() {
     let disposed = false;
     let ending = false;
     const receive = async (j: Job) => {
-      if (disposed || currentPid.current !== p || jobRef.current?.id !== jid || (j.type === "preview" && submitLock.current)) return;
+      if (disposed || j.id !== jid || j.projectId !== p || currentPid.current !== p || jobRef.current?.id !== jid || (j.type === "preview" && submitLock.current)) return;
       setDisconnected(false);
       setJob(j);
       if (terminal(j) && !ending) {
@@ -231,8 +273,10 @@ export function App() {
         submitLock.current = false;
         if (j.type !== "discuss" && j.type !== "render" && j.type !== "video")
           setReloadKey((k) => k + 1);
-        await load(p).catch(e => setError("刷新任务状态失败：" + e.message));
-        if (disposed || currentPid.current !== p || jobRef.current?.id !== jid) return;
+        await load(p).catch(e => {
+          if (isContext(p, jid)) setError("刷新任务状态失败：" + e.message);
+        });
+        if (!isContext(p, jid)) return;
         if (j.status === "succeeded") {
           if (j.type !== "discuss")
             setNotice(
@@ -248,22 +292,29 @@ export function App() {
         } else setError(j.error || "任务已取消");
       }
     };
-    const source = new EventSource(`/api/jobs/${jid}/events`);
-    source.onmessage = (e) => void receive(JSON.parse(e.data));
-    source.onerror = () => {
-      if (disposed || ending) return;
+    const fail = (error: Error) => {
+      if (disposed || ending || !isContext(p, jid)) return;
       setDisconnected(true);
-      void api<Job>(`/jobs/${jid}`)
-        .then(receive)
-        .catch((e) => setError(e.message));
+      setError("任务状态无法确认：" + error.message);
     };
-    const poll = setInterval(
-      () =>
-        void api<Job>(`/jobs/${jid}`)
-          .then(receive)
-          .catch((e) => setError(e.message)),
-      4000,
-    );
+    const source = new EventSource(`/api/jobs/${jid}/events`);
+    source.onmessage = (event) => {
+      try { void receive(JSON.parse(event.data)).catch(fail); }
+      catch (error) { fail(error as Error); }
+    };
+    let polling = false;
+    const pollJob = async () => {
+      if (disposed || ending || polling || !isContext(p, jid)) return;
+      polling = true;
+      try { await receive(await api<Job>(`/jobs/${jid}`)); }
+      catch (error) { fail(error as Error); }
+      finally { polling = false; }
+    };
+    source.onerror = () => {
+      if (!disposed && !ending && isContext(p, jid)) setDisconnected(true);
+      void pollJob();
+    };
+    const poll = setInterval(() => void pollJob(), 4000);
     return () => {
       disposed = true;
       source.close();
@@ -273,7 +324,7 @@ export function App() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (recording||document.querySelector(".project-home")) return;
+      if (recording||document.querySelector(".project-home")||document.querySelector('[aria-modal="true"]')) return;
       if (imageExport) {
         if (e.key === "Escape") setImageExport(false);
         return;
@@ -308,32 +359,53 @@ export function App() {
     const timer = setTimeout(() => setNotice(""), 5000);
     return () => clearTimeout(timer);
   }, [notice]);
-  async function startJob(endpoint: string, body: unknown) {
+  async function startJob(endpoint: string, body: unknown, retryId?: string) {
     if (submitLock.current || busy) return false;
     submitLock.current = true;
+    const sequence = ++submissionSequence.current;
+    const taskPid = pid;
+    const expectedJobId = jobRef.current?.id;
+    const knownJobs = new Set([...(snapshot?.jobs || []).map(value => value.id), ...(expectedJobId ? [expectedJobId] : [])]);
+    const expectedType = retryId ? snapshot?.jobs?.find(value => value.id === retryId)?.type || (jobRef.current?.id === retryId ? jobRef.current.type : undefined) : endpoint.startsWith("videos/") ? "video" : (({ commands: "command", "blender/sync": "blender-sync", "blender/edit": "blender-edit" } as Record<string, string>)[endpoint] || endpoint);
     setSubmitting(true);
     setError("");
     setNotice("");
-    const taskPid = pid;
     try {
-      const j = await api<Job>(`/projects/${taskPid}/${endpoint}`, body);
-      if (currentPid.current !== taskPid) return true;
-      setJob(j);
+      const value = await api<Job>(retryId ? `/jobs/${retryId}/retry` : `/projects/${taskPid}/${endpoint}`, body);
+      if (!value || typeof value.id !== "string" || value.projectId !== taskPid)
+        throw new ApiRequestError("后台返回的任务归属无法确认，请核对最新项目状态后再操作。", true);
+      if (sequence !== submissionSequence.current || !isContext(taskPid, expectedJobId)) return true;
+      if (sequence !== submissionSequence.current || !acceptJob(taskPid, expectedJobId, value)) return true;
       // Accepted messages must not be resent just because refreshing the view failed.
-      await load(taskPid).catch((e) =>
-        setError("任务已提交，刷新状态失败：" + e.message),
-      );
+      await load(taskPid).catch((error) => {
+        if (isContext(taskPid, value.id)) setError("任务已提交，刷新状态失败：" + error.message);
+      });
       return true;
-    } catch (e) {
-      if (currentPid.current === taskPid) {
-        setError((e as Error).message);
-        await load(taskPid).catch(() => {});
-        if (endpoint !== "render") setReloadKey((k) => k + 1);
+    } catch (error) {
+      const uncertain = error instanceof ApiRequestError && error.outcomeUnknown;
+      const acceptedIn = (value?: Snapshot) => value?.project?.id === taskPid && [value.activeJob, ...(value.jobs || []).slice().reverse()].some(candidate => candidate && candidate.projectId === taskPid && !knownJobs.has(candidate.id) && candidate.type === expectedType);
+      if (sequence !== submissionSequence.current || !isContext(taskPid, expectedJobId)) {
+        // A rejected old write keeps that project's draft; only verified acceptance consumes it.
+        return uncertain && acceptedIn((error as ApiRequestError).reconciliation as Snapshot | undefined);
       }
+      let refreshed: Snapshot | undefined;
+      try { refreshed = await load(taskPid); } catch { /* The original error remains actionable. */ }
+      if (sequence !== submissionSequence.current || currentPid.current !== taskPid)
+        return uncertain && acceptedIn(refreshed || (error as ApiRequestError).reconciliation as Snapshot | undefined);
+      if (uncertain && acceptedIn(refreshed)) {
+          // Snapshot is authoritative, including a follow-up preview after a completed write.
+          setNotice("后台已接受任务，已恢复最新状态。请等待结果，无需重复提交。");
+          return true;
+      }
+      if (jobRef.current?.id !== expectedJobId) return false;
+      setError((error as Error).message);
+      if (endpoint !== "render") setReloadKey((key) => key + 1);
       return false;
     } finally {
-      setSubmitting(false);
-      submitLock.current = false;
+      if (sequence === submissionSequence.current && currentPid.current === taskPid) {
+        setSubmitting(false);
+        submitLock.current = false;
+      }
     }
   }
   async function discuss(text: string, attachmentIds: string[]) {
@@ -355,35 +427,37 @@ export function App() {
     if (!base || !id) return;
     await startJob("commands", { ...c, objectId: id, baseRevisionId: base });
   }
-  async function history(
-    action: "undo" | "redo" | "restore",
-    revisionId?: string,
-  ) {
+  async function history(action: "undo" | "redo" | "restore", revisionId?: string) {
     if (busy || submitLock.current || !snapshot) return;
     if (action === "undo" && !base) return;
     if (action === "redo" && !snapshot.project.redo.length) return;
+    const taskPid = pid, expectedJobId = jobRef.current?.id;
+    const sequence = ++submissionSequence.current;
     submitLock.current = true;
     setSubmitting(true);
     setError("");
     setNotice("");
     try {
-      await api(`/projects/${pid}/restore`, {
-        baseRevisionId: base,
-        revisionId,
-        action,
-      });
-      await load(pid);
-      setReloadKey((k) => k + 1);
+      await api(`/projects/${taskPid}/restore`, { baseRevisionId: base, revisionId, action });
+      if (sequence !== submissionSequence.current || !isContext(taskPid, expectedJobId)) return;
+      await load(taskPid);
+      if (sequence !== submissionSequence.current || currentPid.current !== taskPid) return;
+      setReloadKey((key) => key + 1);
       setPanel("");
-      setNotice(
-        action === "undo" ? "已撤销上一步" :
-        action === "redo" ? "已重做一步" : "已恢复所选版本",
-      );
-    } catch (e) {
-      setError((e as Error).message);
+      setNotice(action === "undo" ? "已撤销上一步" : action === "redo" ? "已重做一步" : "已恢复所选版本");
+    } catch (error) {
+      if (sequence !== submissionSequence.current || !isContext(taskPid, expectedJobId)) return;
+      if (error instanceof ApiRequestError && error.outcomeUnknown) {
+        await load(taskPid).catch(() => {});
+        if (sequence !== submissionSequence.current || currentPid.current !== taskPid) return;
+        setReloadKey((key) => key + 1);
+      }
+      setError((error as Error).message);
     } finally {
-      setSubmitting(false);
-      submitLock.current = false;
+      if (sequence === submissionSequence.current && currentPid.current === taskPid) {
+        setSubmitting(false);
+        submitLock.current = false;
+      }
     }
   }
   async function openPanel(name: string) {
@@ -397,9 +471,15 @@ export function App() {
     if (panel !== name && name !== "projects") setChatExpanded(false);
     if (name === "scene" || name === "inspector") setRenderView(false);
     setPanel(panel === name ? "" : name);
-    if (name === "history")
-      setRevisions(await api(`/projects/${pid}/revisions`));
-    if (name === "projects") await loadProjects();
+    if (name === "history") {
+      const taskPid = pid, expectedJobId = jobRef.current?.id;
+      try {
+        const values = await api<Revision[]>(`/projects/${taskPid}/revisions`);
+        if (isContext(taskPid, expectedJobId)) setRevisions(values);
+      } catch (error) {
+        if (isContext(taskPid, expectedJobId)) setError("读取版本历史失败：" + (error as Error).message);
+      }
+    }
   }
   async function render() {
     if (!base || !viewport.current || !imageExport || exportTab !== "image" || recording || !validImageSettings(settings)) return;
@@ -474,7 +554,7 @@ export function App() {
           <span>{busy ? "处理中" : base ? snapshot?.revision?.preview && snapshot.revision.preview.status !== "ready" ? "已保存 · 基础预览" : "已保存" : "空白项目"}</span>
         </span>
         <div className="top-actions">
-          {snapshot && <BlenderLink pid={pid} objectId={selected} base={base} busy={busy} onJob={j => { setJob(j); void load(pid); }} onError={setError} />}
+          {snapshot && <BlenderLink key={pid} pid={pid} objectId={selected} base={base} busy={busy} onStartJob={startJob} onError={message => { if (isContext(pid, job?.id)) setError(message); }} />}
           {snapshot && <VisualReferences key={snapshot.project.id} jobs={[...(snapshot.jobs || []), ...(job?.visual ? [job] : [])]} current={snapshot.revision?.visual} />}
           <div className="history-controls" role="group" aria-label="撤销与重做">
           <button
@@ -547,7 +627,7 @@ export function App() {
       </main>
       {imageExport && snapshot && <ExportPanel snapshot={snapshot} tab={exportTab} onTab={setExportTab} locked={!!recording} onClose={() => setImageExport(false)}>
         {exportTab === "image" && <ImageExport snapshot={snapshot} settings={settings} onSettings={setSettings} busy={busy} ready={previewRevision === base ? previewStatus : "loading"} job={job} error={error} stale={renderStale} onRender={() => void render()} onViewImage={() => setShowRender(true)} onReload={() => {setPreviewStatus("loading");setReloadKey(k=>k+1);}} />}
-        {exportTab === "video" && <VideoExport snapshot={{...snapshot, activeJob:job&&!terminal(job)?job:null}} settings={videoSettings} onSettings={setVideoSettings} recording={!!recording} ready={previewRevision===base?previewStatus:"loading"} onReload={()=>{setPreviewStatus("loading");setReloadKey(k=>k+1)}} busy={busy} onRecord={s=>setRecording({...s})} onJob={j=>{setJob(j);void load(pid)}} />}
+        {exportTab === "video" && <VideoExport key={pid} snapshot={{...snapshot, activeJob:job&&!terminal(job)?job:null}} settings={videoSettings} onSettings={setVideoSettings} recording={!!recording} ready={previewRevision===base?previewStatus:"loading"} onReload={()=>{setPreviewStatus("loading");setReloadKey(k=>k+1)}} busy={busy} onRecord={s=>setRecording({...s})} onRender={id => startJob(`videos/${id}/render`, {})} />}
       </ExportPanel>}
       {renderView && base && (
         <div className="preview-label glass">
@@ -692,8 +772,8 @@ export function App() {
           preview={previewRevision===base?previewStatus:'loading'}
           disconnected={disconnected}
           onReload={()=>{setPreviewStatus('loading');setReloadKey(k=>k+1)}}
-          aiReady={!!health?.codex?.ok}
-          modelReady={!!health?.ok}
+          aiReady={!healthStale && !!health?.codex?.ok}
+          modelReady={!healthStale && !!health?.ok}
           selected={selected}
           expanded={chatExpanded}
           hidden={chatHidden}
@@ -704,13 +784,13 @@ export function App() {
           onStop={() => {
             if (job)
               void api(`/jobs/${job.id}/cancel`, {}).catch((e) =>
-                setError(e.message),
+                currentPid.current === pid && jobRef.current?.id === job.id && setError(e.message),
               );
           }}
           onHealth={() => void openPanel("health")}
-          onError={setError}
+          onError={message => { if (isContext(pid, job?.id)) setError(message); }}
           suggested={prompt}
-          onRetryJob={id => { setError(""); void api<Job>(`/jobs/${id}/retry`, {}).then(async j => { setJob(j); await load(pid); }).catch(e => setError(e.message)); }}
+          onRetryJob={id => { void startJob("retry", {}, id); }}
         />
       )}
       {snapshot && chatHidden && (
@@ -748,7 +828,7 @@ export function App() {
           onClick={() => void openPanel("health")}
         >
           <Settings2 size={18} />
-          {health && !health.ok && <i className="warning-dot" />}
+          {(healthStale || (health && !health.ok)) && <i className="warning-dot" />}
         </button>
         <div className="view-picker glass">
           <select
@@ -823,7 +903,8 @@ export function App() {
           onOpen={(id) => {
             if(recording){setError("正在录制，请先保存或结束录制后再切换作品。");return;}
             setResumeId(id);
-            void api(`/projects/${id}/opened`,{}).catch(e=>setError(e.message));
+            currentPid.current = id;
+            void api(`/projects/${id}/opened`,{}).catch(e=>{if(currentPid.current===id)setError(e.message)});
             setPid(id);
             setPanel("");
             setPrompt("");
@@ -836,10 +917,11 @@ export function App() {
           onError={setError}
         />
       )}
-      {recording&&base&&<VideoRecorder embedded pid={pid} base={base} settings={recording} viewport={viewport} onClose={()=>{setRecording(null);setExportTab('video')}} onReturnToWorkbench={()=>{setRecording(null);setImageExport(false);setExportTab('video')}} onSaved={()=>void load(pid)} onRender={id=>startJob(`videos/${id}/render`,{})}/>}
+      {recording&&base&&<VideoRecorder embedded pid={pid} base={base} settings={recording} viewport={viewport} onClose={()=>{setRecording(null);setExportTab('video')}} onReturnToWorkbench={()=>{setRecording(null);setImageExport(false);setExportTab('video')}} onSaved={()=>{void load(pid).catch(error=>{if(isContext(pid,job?.id))setError("刷新视频状态失败："+error.message)})}} onRender={id=>startJob(`videos/${id}/render`,{})}/>}
       {["history", "health"].includes(panel) && (
         <div className="modal-backdrop" onClick={() => setPanel("")}>
           <section
+            ref={appModal}
             className={"modal glass " + (panel === "chat" ? "chat-modal" : "")}
             role="dialog"
             aria-modal="true"
@@ -907,6 +989,7 @@ export function App() {
             )}
             {panel === "health" && (
               <>
+                {healthError && <p role="alert">{healthError} 上次检查结果已过期。</p>}
                 <p className="muted">
                   AI 复用本机 Codex 登录；建模和文件保存在本机。
                 </p>
@@ -961,12 +1044,7 @@ export function App() {
                 <button
                   className="button dark"
                   disabled={health?.checking}
-                  onClick={() => {
-                    setHealth({ ...health, checking: true });
-                    void api("/health/recheck", {})
-                      .then(setHealth)
-                      .catch((e) => setError(e.message));
-                  }}
+                  onClick={() => { void refreshHealth(true); }}
                 >
                   {health?.checking ? (
                     <Loader2 size={16} className="spin" />

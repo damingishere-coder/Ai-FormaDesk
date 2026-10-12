@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { Snapshot, VideoSettings, Job } from "./types";
+import { useEffect, useRef, useState } from "react";
+import type { Snapshot, VideoSettings } from "./types";
 import { api } from "./api";
 export const defaultVideoSettings: VideoSettings = {
   width: 1280,
@@ -15,7 +15,7 @@ export function VideoExport({
   snapshot,
   busy,
   onRecord,
-  onJob,
+  onRender,
   settings,
   onSettings: setSettings,
   ready,
@@ -25,7 +25,7 @@ export function VideoExport({
   snapshot: Snapshot;
   busy: boolean;
   onRecord: (s: VideoSettings) => void;
-  onJob: (j: Job) => void;
+  onRender: (id: string) => Promise<boolean>;
   settings: VideoSettings;
   onSettings: (settings: VideoSettings) => void;
   ready: "loading" | "ready" | "failed";
@@ -33,6 +33,9 @@ export function VideoExport({
   onReload: () => void;
 }) {
   const [error, setError] = useState("");
+  const currentJob = useRef(snapshot.activeJob?.id);
+  currentJob.current = snapshot.activeJob?.id;
+  useEffect(() => setError(""), [snapshot.activeJob?.id]);
   const valid = validVideoSettings(settings);
   const dimensions = `${settings.width}x${settings.height}`;
   const active =
@@ -131,7 +134,7 @@ export function VideoExport({
               className="button"
               onClick={() =>
                 void api(`/jobs/${active.id}/cancel`, {}).catch((e) =>
-                  setError(e.message),
+                  currentJob.current === active.id && setError(e.message),
                 )
               }
             >
@@ -172,12 +175,7 @@ export function VideoExport({
                   snapshot.project.currentRevisionId !== v.revisionId
                 }
                 onClick={() =>
-                  void api<Job>(
-                    `/projects/${v.projectId}/videos/${v.id}/render`,
-                    {},
-                  )
-                    .then(onJob)
-                    .catch((e) => setError(e.message))
+                  void onRender(v.id)
                 }
               >
                 继续生成视频
