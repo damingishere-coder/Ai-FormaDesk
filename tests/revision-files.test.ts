@@ -71,9 +71,10 @@ it("真实 SIGKILL 遗留标记可由只读命令识别，既不抢锁也不删�
   });
   let error = "";child.stderr!.on("data", b => error += b);
   const message = await new Promise<{ id: string }>((resolve, reject) => {
-    child.once("message", v => resolve(v as { id: string }));
-    child.once("error", reject);
-    child.once("exit", () => reject(new Error(error || "fixture exited before ready")));
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error(error || "fixture ready timeout")); }, 5000);
+    child.once("message", v => { clearTimeout(timer); resolve(v as { id: string }); });
+    child.once("error", e => { clearTimeout(timer); reject(e); });
+    child.once("exit", () => { clearTimeout(timer); reject(new Error(error || "fixture exited before ready")); });
   });
   child.kill("SIGKILL");
   await new Promise(resolve => child.once("close", resolve));

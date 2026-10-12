@@ -177,7 +177,8 @@ try {
     await page.getByLabel("图片宽度").fill("512");
     await page.getByLabel("图片高度").fill("512");
     await page.getByRole("button", { name: "生成图片", exact: true }).click();
-    await expect(page.getByRole("link", { name: "下载原图" })).toBeVisible({
+    const rendered = page.getByRole("dialog", { name: "Blender 成品图" });
+    await expect(rendered.getByRole("link", { name: "下载原图" })).toBeVisible({
       timeout: 180000,
     });
     const pngPath = path.join(home, "render.png");
@@ -186,7 +187,7 @@ try {
         .fromPartition("forma-desktop")
         .on("will-download", (_e, item) => item.setSavePath(file));
     }, pngPath);
-    await page.getByRole("link", { name: "下载原图" }).click();
+    await rendered.getByRole("link", { name: "下载原图" }).click();
     await expect
       .poll(() => (fs.existsSync(pngPath) ? fs.statSync(pngPath).size : 0), {
         timeout: 15000,
@@ -195,6 +196,8 @@ try {
     assert.equal(fs.readFileSync(pngPath).subarray(1, 4).toString(), "PNG");
     checks.push("真实 Blender 512×512 PNG 渲染与下载完成");
     await page.screenshot({ path: path.join(evidence, "image-export.png") });
+    await rendered.getByRole("button", { name: "关闭成品图" }).click();
+    await expect(rendered).toHaveCount(0);
     await page.getByRole("tab", { name: "视频", exact: true }).click();
     await page.getByLabel("视频宽度").fill("640");
     await page.getByLabel("视频高度").fill("360");
