@@ -12,7 +12,7 @@
 
 ## 验收清单
 
-每组应保持独立提交与回滚。以下为本轮范围，最终结果/提交与交付状态在完成验证后填写。
+每组保持独立提交与回滚。下表列出本轮验收范围，实测结果与提交见后文。
 
 | 轮次 | 必须证明的行为 |
 | --- | --- |
@@ -33,3 +33,57 @@
 所有数据库/执行故障注入仅使用独立临时 DATA；AI和GUI用户场景不参与默认回归。单元/mock/固定Blender场景只能证明相应层，不能保证任意照片建模质量、复杂场景或所有设备。
 
 源码提交后按既有 CI/PR 要求合入；桌面包仅在来源提交明确、独立包验收成功后按原发布流程交付。日志、缓存、构建包、认证资料和用户作品不进入源码提交。
+
+## 责任与提交边界
+
+```mermaid
+flowchart LR
+  UI[当前作品 / 提交代次] --> API[有限等待的 API 请求]
+  API --> Owner[写入前 DATA 所有权]
+  Owner --> Jobs[jobs：排队、执行、取消]
+  Jobs --> Worker[隔离 Blender / AI / MCP]
+  Worker --> Commit[revision-commit：校验 base 与取消]
+  Commit --> Files[revision-files：新目录与提交标记]
+  Commit --> DB[SQLite：artifact / revision / project / job / proposal / message]
+  DB --> Saved[事务已提交]
+  Saved --> Event[发布成功事件]
+  Saved --> Detail[可独立恢复的预览任务]
+  Files --> Scan[只读残留诊断]
+  Jobs --> Artifacts[artifacts：登记与文件路径边界]
+  Video[videos：视频执行] --> Artifacts
+```
+
+- `jobs` 保留排队与业务编排；`artifacts` 不导入 `jobs`，`videos` 直接依赖 `artifacts`。旧 artifact exports 保留，现有脚本接口不变。
+- `revision-commit` 只提交已经验证的产物与核心索引。成功 Job 使用独立快照，在 SQLite transaction 返回后才更新内存并发布事件；消息写入失败不能提前发出“成功”。
+- 文件系统与 SQLite 不能变成同一原子事务。失败只补偿本次随机 ID、token 匹配的目录；进程硬退出可能留下 `.commit-pending.json`，只读报告后人工核对，不自动删除未知作品。
+- `active-record` 表示数据库仍有 queued/running 记录，不能证明 worker 仍存活；`interrupted`、`committed-marker`、`untracked`、`invalid-marker`、`blocked-path` 同样是诊断线索，不能直接当作删除许可。
+
+## 运维与回滚
+
+- 本轮不改 Schema、作品目录路径或已有对象 ID，不自动重发写请求、不重放中断的 AI 任务。
+- `ZAOWU_DATA_DIR=/绝对/作品目录 npm run check:revision-files` 只读取索引和标记，可以在后台持锁时执行；输出不包含模型内容或凭据。先备份、核对业务记录与 owner/worker，再决定任何后续清理。
+- 普通 owner 被 SIGKILL 后可在重启回收。若“陈旧锁回收”自身在极短窗口被 SIGKILL，恢复守卫会保留，后续启动安全拒绝写入。确认工作台和维护进程均退出、owner PID 与出生时间无合法 writer 后，才处理空 `.desktop-owner-recovery`；坏 owner JSON 同理，不能直接当作旧锁删除。
+- 每组使用独立提交，回退源码/依赖锁即可撤回相应行为；撤回不删除本轮或既有作品。提交标记仅是额外文件，旧版本不读取它。桌面安装沿用现有脚本，保留旧 app 与 Dock 备份，作品和设置原位保留。
+- 默认 mock suite 不启动后台、不代理到日常端口、不允许未 mock 的 API 或外部请求。真实浏览器/历史 CLI 验收必须明确 opt-in，并在系统临时 `formadesk-live-*` DATA 与独立 URL 上执行；真实 AI 还需单独 opt-in。
+
+## 实测完成记录
+
+| 轮次 | 实现提交 | 实际证据 |
+| --- | --- | --- |
+| P1.0 | `7b93123` | 正式 main/发行来源核对；243 个旧副本文件归档与 SHA256 清单；独立 npm ci/build。 |
+| P1.1 | `10f7b99` | data-lock 10 项、startup 12 项；同/异端口第二实例拒绝，6 进程陈旧锁竞争仅一个胜者；SIGKILL 恢复及 ready 后 SIGTERM。 |
+| P1.2 | `3d01bfe` | 保存后排队失败仍成功，预览可继续、方案不降级；5 项 commit 与 3 项 preview 回归。 |
+| P1.3 / P2.3 / 键盘 | `6a4b9d1` | 19 项前端边界、11 项 API 回归；迟到响应、未知写结果核对、失效健康/状态与实际模态焦点。 |
+| P1.4 | `bc6a5fa`、`34ea6a3`、`dbffda2`、`9914e3e` | 默认 safe browser 46/46；原 5 条失败恢复；20 旧脚本 54 次实际子进程拒绝、6 项 guard；另 5 项浏览器负向护栏按预期拒绝。 |
+| P2.1 | `53ad853` | ENOSPC、SQLite rollback、真实 SIGKILL 遗留；4 项文件归属/残留，旧成果与其他作品保留。 |
+| P2.2 | `b72a3a8` | Fastify 5.12.5 / MCP 1.31.0 / sharp 0.35.5；生产 npm audit 7→0；原生图片/SQLite、上传坏文件与协议回归；完整开发链仍 11 项需另轮工具升级。 |
+| P2.3a / 子树 | `6dfadc3` | MCP 19 项；Python 子树 11 项（含1200/1500层及超限/环/重复节点）；实际 Blender helper 导入/顺序/ID。 |
+| P2.4 | `310b4c5`、`7126fae` | artifact 独立与无 jobs↔videos 循环；成功后消息写入失败不广播成功；23 项版本/取消/恢复/提交定向回归及真实新旧 .blend。 |
+
+整体验证：`npm test` **25 文件 / 131 项通过**；`npm run test:python` **3 插件 + 11 子树通过**；TypeScript/Vite 构建与独立 `.app` 打包通过；保留主包 >500KB 提示，没有为压分或体积提示改业务。
+
+真实 Blender smoke：AI 调用 **0**，两类沙箱读/写/本机及外网阻断、凭据隔离；固定立方体重命名后新 revision/parent/对象 ID/artifact 归属正确，旧模型 SHA 不变；新 .blend 再打开正确、0400 核心文件与无提交残留通过。
+
+候选 `.app` 已复制到源码之外、以最小 PATH 运行：packaged 模式、私有会话和列表凭据范围、12 对象真实 GLB、GLB/.blend 原生下载、512×512 Blender PNG、640×360 短录制保存/下载、退出释放后台与锁、重启恢复作品均通过。首次桌面验收发现旧全局“下载原图”选择器同时命中详情与弹窗，已定位至实际成品图对话框并明确关闭后继续视频，原下载/尺寸断言保留。
+
+源码 PR 必须通过本轮新增 CI：完整 unit、Python、build、安装隔离 Chromium、safe browser、浏览器负向护栏与生产 audit。发行/本机替换使用通过这些检查后合并的干净版本；最终状态以 GitHub PR/Release 及安装包 build-info 为准，不能将上述候选包的来源元数据充当最终发行来源。

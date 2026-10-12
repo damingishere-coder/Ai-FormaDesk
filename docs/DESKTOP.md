@@ -2,7 +2,7 @@
 
 ## 安装
 
-从仓库 Releases 下载 `Ai-FormaDesk-1.1.0-macOS-arm64.dmg`，打开后将应用拖入“应用程序”。应用包内包含界面、Electron、Node.js 22 与后台依赖，不依赖本机源码目录或 npm。
+从仓库 Releases 下载 `Ai-FormaDesk-1.1.1-macOS-arm64.dmg`，打开后将应用拖入“应用程序”。应用包内包含界面、Electron、Node.js 22 与后台依赖，不依赖本机源码目录或 npm。1.1.1 的工程边界与验收见 [发布记录](releases/1.1.1.md)。
 
 需要 Apple Silicon Mac、macOS 13 或以上。请另行安装 Blender 4.5 LTS 与已经登录的 Codex CLI。默认 Blender 路径为 `/Applications/Blender 4.5 LTS.app/Contents/MacOS/Blender`；其他位置可通过应用菜单设置。
 
